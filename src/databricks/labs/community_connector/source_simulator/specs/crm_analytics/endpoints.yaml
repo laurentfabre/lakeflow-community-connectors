@@ -1,0 +1,41 @@
+# Metadata is dynamic and queries are POSTed SAQL, so each resource uses the
+# documented custom-handler extension rather than pretending SAQL is REST paging.
+# Corpus contract (all synthetic until record-mode validation):
+#   datasets.json: array of Dataset resources, with id/type/currentVersionId.
+#   versions.json: array of DatasetVersion resources including dataset.id,
+#                  createdDate, totalRowCount, and xmdMain.
+#   rows_<dataset_id>_<version_id>.json: raw SOURCE-NAMED row objects.
+# The tester owns corpus generation; handlers never manufacture missing metadata.
+endpoints:
+  - path: "/services/data/v{api_version}/wave/datasets"
+    method: GET
+    handler: databricks.labs.community_connector.source_simulator.specs.crm_analytics.handlers:datasets
+    params:
+      pageSize: {role: per_page, default: 25, max: 200}
+      page: {role: ignore}  # opaque cursor is implemented by the custom handler
+      datasetTypes: {role: filter, field: datasetType, op: eq}
+      hasCurrentOnly: {role: ignore}
+    response:
+      pagination_style: cursor
+      wrapper: {records_key: datasets}
+
+  - path: "/services/data/v{api_version}/wave/datasets/{dataset_id}"
+    method: GET
+    handler: databricks.labs.community_connector.source_simulator.specs.crm_analytics.handlers:dataset
+    response:
+      single_entity: true
+
+  - path: "/services/data/v{api_version}/wave/datasets/{dataset_id}/versions/{version_id}"
+    method: GET
+    handler: databricks.labs.community_connector.source_simulator.specs.crm_analytics.handlers:version
+    params:
+      filterGroup: {role: ignore}
+    response:
+      single_entity: true
+
+  - path: "/services/data/v{api_version}/wave/query"
+    method: POST
+    handler: databricks.labs.community_connector.source_simulator.specs.crm_analytics.handlers:query
+    response:
+      pagination_style: none
+      wrapper: {records_key: results.records}

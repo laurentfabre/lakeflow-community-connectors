@@ -1,0 +1,79 @@
+[
+  {
+    "Account.Id": "synthetic-account-0000",
+    "Amount": "248.48",
+    "CloseDate": "2026-09-01",
+    "CloseDate_Year": "2026",
+    "CloseDate_epochSecond": 1788220800,
+    "Name": "quebec-691",
+    "Region": "synthetic-region",
+    "name": "xray-970",
+    "État, rôle": "victor-245"
+  },
+  {
+    "Account.Id": "synthetic-account-0001",
+    "Amount": "336.23",
+    "CloseDate": "2026-09-01",
+    "CloseDate_Year": "2026",
+    "CloseDate_epochSecond": 1788220801,
+    "Name": "mike-349",
+    "Region": "synthetic-region",
+    "name": "golf-708",
+    "État, rôle": "india-312"
+  },
+  {
+    "Account.Id": "synthetic-account-0002",
+    "Amount": "21.38",
+    "CloseDate": "2026-09-01",
+    "CloseDate_Year": "2026",
+    "CloseDate_epochSecond": 1788220802,
+    "Name": "charlie-922",
+    "Region": "synthetic-region",
+    "name": "mike-935",
+    "État, rôle": "oscar-343"
+  },
+  {
+    "Account.Id": "synthetic-account-0003",
+    "Amount": "733.28",
+    "CloseDate": "2026-09-01",
+    "CloseDate_Year": "2026",
+    "CloseDate_epochSecond": 1788220803,
+    "Name": "golf-107",
+    "Region": "synthetic-region",
+    "name": "tango-510",
+    "État, rôle": "alpha-148"
+  },
+  {
+    "Account.Id": "synthetic-account-0004",
+    "Amount": "295.17",
+    "CloseDate": "2026-09-01",
+    "CloseDate_Year": "2026",
+    "CloseDate_epochSecond": 1788220804,
+    "Name": "papa-177",
+    "Region": "synthetic-region",
+    "name": "kilo-794",
+    "État, rôle": "victor-848"
+  },
+  {
+    "Account.Id": "synthetic-account-0005",
+    "Amount": "246.32",
+    "CloseDate": "2026-09-01",
+    "CloseDate_Year": "2026",
+    "CloseDate_epochSecond": 1788220805,
+    "Name": "tango-939",
+    "Region": "synthetic-region",
+    "name": "xray-620",
+    "État, rôle": "hotel-778"
+  },
+  {
+    "Account.Id": "synthetic-account-0006",
+    "Amount": "193.51",
+    "CloseDate": "2026-09-01",
+    "CloseDate_Year": "2026",
+    "CloseDate_epochSecond": 1788220806,
+    "Name": "kilo-587",
+    "Region": "synthetic-region",
+    "name": "bravo-542",
+    "État, rôle": "bravo-226"
+  }
+]

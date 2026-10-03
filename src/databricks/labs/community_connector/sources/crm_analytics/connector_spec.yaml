@@ -1,0 +1,163 @@
+# Salesforce CRM Analytics Community Connector Spec
+# Phase 1 only: no live Salesforce or Unity Catalog OAuth validation performed.
+# Tables are dynamically discovered materialized Default dataset IDs, not
+# Salesforce sObjects. Only scalar, full-visibility snapshots are supported.
+display_name: Salesforce CRM Analytics
+
+connection:
+  parameters:
+    - name: client_id
+      type: string
+      required: true
+      secret: true
+      description: >
+        Consumer key of the Salesforce OAuth application. The connection layer
+        uses this app identity for authorization-code authentication; the source
+        connector itself consumes only the injected opaque access token.
+
+    - name: client_secret
+      type: string
+      required: true
+      secret: true
+      description: >
+        Consumer secret for the Salesforce OAuth application. Store it as a
+        connection secret, never in pipeline code, fixtures, or logs.
+
+    - name: instance_url
+      type: string
+      required: true
+      description: >
+        The target organization's trusted HTTPS Salesforce API origin, for
+        example https://example.my.salesforce.com. Must use a host ending in
+        .salesforce.com and no path other than /, query, credentials, fragment,
+        or non-443 port. This is the data API origin for the authorizing
+        integration identity, not the generic login authorization endpoint.
+
+    - name: api_version
+      type: string
+      required: true
+      description: >
+        Explicit REST API version supported by the target organization, in
+        NN.0 format and at least 53.0 (for totalRowCount). No latest-version
+        default is assumed. Organization availability requires Phase 2 checking.
+
+    - name: page_size
+      type: integer
+      required: false
+      description: >
+        Records requested per SAQL extraction page, from 1 to 10000 inclusive;
+        defaults to 1000. This is not a total snapshot row cap. Every page and
+        terminal-page/count validation must complete before publication.
+
+    - name: timeout_seconds
+      type: integer
+      required: false
+      description: >
+        Connect timeout and read timeout for each HTTP request, from 1 to 300
+        seconds inclusive; defaults to 30. This is not an overall snapshot
+        deadline. Exhausted timeouts abort the snapshot.
+
+    - name: max_retries
+      type: integer
+      required: false
+      description: >
+        Additional attempts after eligible connection failures, timeouts,
+        HTTP 429, or HTTP 500/502/503/504, from 0 to 8 inclusive; defaults to 3.
+        HTTP 401 fails immediately; the connector does not refresh tokens.
+
+    - name: max_retry_delay_seconds
+      type: integer
+      required: false
+      description: >
+        Bounded exponential-backoff/jitter delay, from 1 to 120 seconds
+        inclusive; defaults to 30. A valid Retry-After exceeding this limit
+        aborts the snapshot rather than retrying earlier than instructed.
+
+  # One stable, shared integration identity authorizes this connection.
+  # Per-query user identities are deliberately not selected: permission or
+  # principal changes must not be interpreted as dataset-row deletions.
+  # The connection layer owns renewal and injects access_token at runtime.
+  # Do not add access_token or refresh_token as required user parameters.
+  #
+  # Public primary evidence accessed 2026-10-02:
+  # https://login.salesforce.com/.well-known/openid-configuration
+  #   Advertises these exact authorization/token endpoints, authorization_code
+  #   and refresh_token grants, api/refresh_token scopes, and PKCE S256.
+  # https://resources.docs.salesforce.com/latest/latest/en-us/sfdc/pdf/bi_dev_guide_rest.pdf
+  #   Quick Start pp. 9-12 documents authorization-code access and api plus
+  #   refresh_token/offline_access scopes for CRM Analytics. Its permissive
+  #   tutorial app policies are not required or recommended by this spec.
+  #
+  # Production-login defaults only. For a sandbox or an organization requiring
+  # My Domain, explicitly override authorization_endpoint and token_endpoint
+  # with that organization's documented OAuth endpoints at connection creation.
+  # Register the exact callback URI used by the selected UC/local OAuth flow
+  # with the Salesforce app. No wildcard or dynamic-port callback compatibility
+  # is asserted. Callback acceptance, PKCE, consent, refresh/rotation, current
+  # token injection, and identity-to-instance matching remain Phase 2 gates.
+  oauth:
+    flow: u2m
+    pkce: true
+    scopes: "api refresh_token"
+    authorization_url: https://login.salesforce.com/services/oauth2/authorize
+    token_url: https://login.salesforce.com/services/oauth2/token
+
+# Complete connector table-option contract. Do not place these options in the
+# connection parameters. Framework/connection transport (including source_name)
+# is ignored by the connector and is not a dataset filter or table option.
+external_options_allowlist: "source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds"
+
+# Table option documentation (all values are transported as strings):
+# source_primary_keys (required): JSON array of distinct SOURCE physical field
+#   names, e.g. ["Account.Id","FiscalYear"]. Keys must exist in pinned XMD as
+#   scalar dimensions/physical date strings and be unique and non-null across
+#   the full snapshot. No automatic key inference is performed.
+# primary_keys (optional): reserved pipeline DESTINATION-key override. Normally
+#   omit it and use read_table_metadata().primary_keys. If supplied it must be a
+#   JSON array matching source_primary_keys mapped under column_name_mode, in
+#   the same order. It is not an alias for source_primary_keys.
+# column_name_mode (optional): readable (default) or legacy_hex. Readable names
+#   preserve ASCII letters/digits/underscores, map dots to __, escape other code
+#   points as _uXXXX_ (lowercase hex, minimum four digits), and prefix digit-leading
+#   names or case-insensitive 'none' with c_. Case-insensitive collisions fail.
+#   legacy_hex retains the original c_ + UTF-8 hex mapping. Existing hex-named
+#   targets must explicitly use legacy_hex or perform an approved migration.
+# selected_columns (optional): nonempty JSON array of distinct SOURCE physical
+#   field names, including every source_primary_keys field. Names are sorted
+#   canonically; input order has no effect. Omit to read all physical columns.
+#   Explicit selection can exclude unsupported columns, but selected derived,
+#   unsafe or unknown fields fail. Malformed metadata still fails. Selection
+#   changes (including all versus explicit) require an approved migration.
+# version_id (optional): explicit 15-/18-character source version ID. Otherwise
+#   currentVersionId is resolved once per connector/table context. Explicitly
+#   pin a version before independent Spark schema/read invocations.
+# supported_scope (required): exactly scalar_full_visibility. Operator attests
+#   supported scalar values for the chosen projection and stable full visibility; this is not
+#   proof from Salesforce metadata. Unsupported types/values fail closed.
+# scope_fingerprint (required): nonblank, operator-managed stable identity of
+#   principal/visibility scope, at most 1024 characters. Scope changes require
+#   a separately approved baseline; never silently treat them as row deletes.
+# decimal_precision (optional): 1..38, default 38.
+# decimal_scale (optional): 0..decimal_precision, default 18. Lowering precision
+#   below 18 also requires lowering scale. Overflow/rounding aborts extraction.
+# max_keys (optional): 1..10000000, default 1000000. Bounds the full-snapshot
+#   uniqueness-validation set. Exceeding this capacity raises, never truncates.
+# max_query_requests (optional): 1..100000, default 2000. Per-read allowance of
+#   actual SAQL HTTP attempts, including retries, both counts and terminal page.
+#   Metadata GETs do not consume this allowance. A retry-free read needs at least
+#   ceil(totalRowCount / page_size) + 3 queries; impossible budgets fail preflight.
+# max_read_seconds (optional): 1..86400, default 1800. Monotonic elapsed budget
+#   from read_table call through exhaustion, including cold metadata, retry waits
+#   and caller delays. Request timeouts are capped to remaining time, but a
+#   synchronous in-flight request is not a hard wall-clock cancellation guarantee.
+#   No completion evidence is issued after budget exhaustion. These are defensive
+#   defaults, not Salesforce quotas or validated volume/runtime guarantees.
+#   Budget tuning does not alter the data configuration fingerprint.
+#
+# Destination keys use the same mapping as columns. Original source names remain
+# available in schema metadata/column_mapping; readable names need that metadata
+# for reversal. Naming-mode changes are schema/scope migrations, not cosmetic.
+# Every read returns a complete snapshot (even for an unchanged version).
+# No source-native CDC, arbitrary filters, or implicit complete empty snapshots.
+# Immutable Bronze manifests and ordered Silver replay belong to separate
+# applications, not this connection specification or connector wheel.

@@ -1,0 +1,45 @@
+[
+  {
+    "id": "0Fc000000000001",
+    "dataset": {
+      "id": "0Fb000000000001"
+    },
+    "totalRowCount": 7,
+    "createdDate": "2026-09-01T00:00:00Z",
+    "predicate": null,
+    "xmdMain": {
+      "dimensions": [
+        {
+          "field": "Account.Id"
+        },
+        {
+          "field": "Region"
+        },
+        {
+          "field": "Name"
+        },
+        {
+          "field": "name"
+        },
+        {
+          "field": "État, rôle"
+        }
+      ],
+      "measures": [
+        {
+          "field": "Amount"
+        }
+      ],
+      "dates": [
+        {
+          "type": "Date",
+          "fields": {
+            "fullField": "CloseDate",
+            "epochSecond": "CloseDate_epochSecond",
+            "year": "CloseDate_Year"
+          }
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "id": "0Fb000000000001",
+    "datasetType": "Default",
+    "currentVersionId": "0Fc000000000001",
+    "name": "SYNTHETIC_Fixture_Only",
+    "folder": {
+      "id": "synthetic-folder"
+    },
+    "permissions": {
+      "read": true
+    }
+  }
+]
