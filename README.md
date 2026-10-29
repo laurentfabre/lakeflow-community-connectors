@@ -84,6 +84,11 @@ The skills below are the building blocks the commands above orchestrate. Invoke 
 
 Each connector runs as a configurable SDP pipeline. Define a **pipeline spec** to configure tables and destinations.
 
+For Salesforce CRM Analytics, see the [customer and partner HTML guide](docs/crm-analytics.html)
+for installation, OAuth, configuration, a feature matrix, troubleshooting, and
+evaluation guidance. Download or open the HTML from a local checkout to view it
+as a webpage. This connector remains a prototype with offline validation only.
+
 - **Databricks UI** — Click **"+New"** > **"Add or upload data"** > select the source under **"Community connectors"**. For custom connectors from your own repo, select **"+ Add Community Connector"**.
 - **CLI tool** — Run `/deploy-connector` in Cursor or Claude Code for guided deployment, or use the CLI directly. See [tools/community_connector](tools/community_connector/README.md).
 

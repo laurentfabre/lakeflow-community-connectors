@@ -4,6 +4,12 @@ This connector reads complete, version-pinned snapshots of Salesforce CRM
 Analytics datasets into Databricks. It reads Analytics dataset rows, not
 Salesforce sObjects such as `Account` or `Opportunity`.
 
+For a customer and partner walkthrough, open the
+[HTML installation, configuration, and troubleshooting guide](../../../../../../docs/crm-analytics.html)
+from a repository checkout. It includes a feature matrix, operating guidance,
+and an evaluation checklist. The HTML guide is a repository document, not a
+connector wheel asset.
+
 Credentialed Salesforce reads, the OAuth lifecycle, and actual Databricks
 Spark/Delta execution have not yet been validated for this connector. Complete
 the repository's `/validate-connector crm_analytics` workflow before production

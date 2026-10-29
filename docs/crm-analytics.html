@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Install, configure, evaluate, and troubleshoot the Salesforce CRM Analytics Lakeflow community connector. Includes a feature matrix and customer and partner rollout guidance.">
+  <meta name="color-scheme" content="light">
+  <title>CRM Analytics connector · Customer &amp; partner guide</title>
+  <style>
+    :root{--ink:#152c35;--muted:#52676f;--paper:#fff;--canvas:#f5f7f7;--line:#dce5e6;--teal:#006b68;--teal-soft:#e7f3f1;--amber:#765112;--amber-soft:#fff4dd;--red:#943c36;--red-soft:#fcece9;--code:#112a33;--radius:12px;--side:254px}
+    *{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:28px}body{margin:0;background:var(--canvas);color:var(--ink);font:16px/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}a{color:var(--teal);text-underline-offset:3px}a:hover{text-decoration-thickness:2px}button,input{font:inherit}button{cursor:pointer}a:focus-visible,button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid #007e83;outline-offset:4px}::selection{background:#cae9e4}
+    .skip{position:fixed;top:-80px;left:16px;padding:10px 18px;background:var(--paper);z-index:10}.skip:focus{top:12px}.sidebar{position:fixed;inset:0 auto 0 0;width:var(--side);padding:32px 24px;background:var(--paper);border-right:1px solid var(--line);overflow-y:auto}.brand{display:flex;gap:10px;align-items:center;font-size:14px;font-weight:750;line-height:1.4}.brand-mark{display:grid;place-items:center;width:34px;height:34px;flex-shrink:0;border-radius:9px;background:var(--teal);color:#fff}.eyebrow{text-transform:uppercase;letter-spacing:.13em;font-size:11px;font-weight:750;color:var(--muted)}.sidebar .eyebrow{margin:32px 0 12px}.sidebar nav{display:grid;gap:3px}.sidebar nav a{padding:7px 10px;border-radius:6px;color:var(--muted);text-decoration:none;font-size:14px}.sidebar nav a:hover,.sidebar nav a[aria-current="location"]{background:var(--teal-soft);color:var(--teal)}.sidebar-foot{margin-top:28px;padding-top:20px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}.sidebar-foot a{display:block;margin-top:6px}.mobile-nav{display:none}
+    main{max-width:1410px;margin-left:var(--side);padding:36px clamp(24px,5vw,88px) 72px}.topline{display:flex;justify-content:space-between;align-items:center;gap:16px;font-size:12px;color:var(--muted);margin-bottom:30px}.topline button{border:1px solid var(--line);background:var(--paper);border-radius:6px;padding:6px 12px;color:var(--ink)}.hero{padding-bottom:34px;border-bottom:1px solid var(--line)}.hero .eyebrow{color:var(--teal)}h1{font-size:clamp(36px,4.4vw,62px);line-height:1.08;letter-spacing:-.045em;max-width:850px;margin:16px 0 20px}h1 span{color:var(--teal)}.lead{max-width:750px;font-size:19px;color:var(--muted);line-height:1.6}.pills{display:flex;flex-wrap:wrap;gap:8px;margin:24px 0}.pill{font-size:12px;font-weight:650;background:var(--paper);border:1px solid var(--line);border-radius:30px;padding:5px 12px}.pill.status{background:var(--amber-soft);border-color:#e4cf9c;color:var(--amber)}.hero-links{display:flex;flex-wrap:wrap;gap:12px;margin-top:24px}.button{display:inline-block;padding:10px 17px;border:1px solid var(--teal);border-radius:7px;background:var(--teal);color:#fff;text-decoration:none;font-size:14px;font-weight:650}.button.secondary{background:transparent;color:var(--teal)}section{padding-top:48px}section>.eyebrow{margin-bottom:9px}h2{font-size:28px;line-height:1.25;letter-spacing:-.025em;margin:0 0 18px}h3{font-size:19px;line-height:1.35;margin:28px 0 12px}h4{font-size:16px;margin:20px 0 8px}p{margin:12px 0}li{margin:7px 0}ul,ol{padding-left:24px}.subtle{color:var(--muted);font-size:14px}.callout{padding:18px 22px;border:1px solid #c6dfdb;border-left:4px solid var(--teal);border-radius:0 var(--radius) var(--radius) 0;background:var(--teal-soft);margin:22px 0}.callout p:first-child{margin-top:0}.callout p:last-child{margin-bottom:0}.callout.warning{background:var(--amber-soft);border-color:#e5d1a4;border-left-color:#a76f10}.callout.danger{background:var(--red-soft);border-color:#ebc4be;border-left-color:var(--red)}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:24px 0}.card{padding:22px;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius)}.card h3{font-size:16px;margin:0 0 8px}.card p{font-size:14px;color:var(--muted);margin:0}.card .number{display:block;font-size:12px;color:var(--teal);font-weight:750;margin-bottom:10px}.diagram{display:flex;align-items:stretch;gap:10px;list-style:none;padding:0;margin:22px 0}.diagram li{flex:1;margin:0;padding:18px 15px;border:1px solid var(--line);border-radius:9px;background:var(--paper);font-size:13px}.diagram strong{display:block;font-size:14px;margin-bottom:5px}.diagram .arrow{flex:0;align-self:center;padding:0;border:0;background:transparent;color:var(--teal);font-size:22px}.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--paper);margin:18px 0}.table-wrap:focus-visible{outline:3px solid var(--teal);outline-offset:3px}table{border-collapse:collapse;width:100%;font-size:14px;text-align:left}caption{text-align:left;font-size:12px;color:var(--muted);padding:12px 16px;border-bottom:1px solid var(--line)}th,td{padding:13px 16px;vertical-align:top;border-bottom:1px solid var(--line)}thead th{background:#edf2f3;color:#3e555e;font-size:12px;font-weight:700}tbody tr:last-child td,tbody tr:last-child th{border-bottom:0}tbody th{font-weight:600}td p{margin:0}td code,th code{overflow-wrap:anywhere}.feature-table{min-width:680px}.tag{display:inline-block;white-space:nowrap;border-radius:5px;font-size:11px;line-height:1.5;font-weight:750;padding:3px 7px}.tag.yes{background:var(--teal-soft);color:var(--teal)}.tag.check{background:var(--amber-soft);color:var(--amber)}.tag.no{background:#eef1f2;color:#4d5e64}.tag.separate{background:#edeafa;color:#62509b}.table-tools{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}.search{display:flex;align-items:center;gap:10px;font-size:13px;flex-wrap:wrap}.search input{min-width:240px;padding:9px 12px;border:1px solid #a7b9bd;border-radius:7px;background:var(--paper);color:var(--ink)}.legend{font-size:13px;color:var(--muted)}.legend .tag{margin-right:5px}.hidden,[hidden]{display:none!important}
+    code{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;font-size:.86em;background:#eaf0f1;padding:2px 5px;border-radius:4px}pre{margin:0;padding:22px;overflow-x:auto;line-height:1.65;background:var(--code);color:#e6f2f3;font-size:13px;border-radius:0 0 9px 9px;tab-size:2}pre code{font-size:inherit;background:transparent;padding:0;color:inherit;white-space:pre}.code-block{margin:18px 0;border-radius:9px;overflow:hidden}.code-bar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:9px 16px;background:#1d3b45;color:#cbdcdf;font-size:12px}.copy{border:1px solid #6c858d;background:transparent;color:#eff8f8;border-radius:5px;font-size:12px;padding:3px 9px}.copy:hover{background:#31515c}.steps{counter-reset:steps;list-style:none;padding:0}.steps>li{counter-increment:steps;position:relative;padding:0 0 12px 44px;margin:24px 0}.steps>li::before{content:counter(steps,decimal-leading-zero);position:absolute;left:0;top:0;font-size:12px;font-weight:750;color:var(--teal);background:var(--teal-soft);padding:5px 8px;border-radius:6px}.steps>li>h3{margin:0 0 10px}details{border:1px solid var(--line);border-radius:9px;background:var(--paper);margin:12px 0;padding:0 18px}summary{cursor:pointer;font-weight:650;padding:16px 0;line-height:1.45}details[open]{padding-bottom:14px}details p,details li{font-size:14px}.checklist{list-style:none;padding-left:0}.checklist li{padding:9px 0 9px 28px;position:relative;border-bottom:1px solid var(--line)}.checklist li::before{content:"□";position:absolute;left:0;color:var(--teal);font-size:19px;top:5px}.resource-list{display:grid;grid-template-columns:1fr 1fr;gap:12px;list-style:none;padding:0}.resource-list li{margin:0;padding:16px 18px;border:1px solid var(--line);border-radius:9px;background:var(--paper)}.resource-list a{font-size:14px;font-weight:650}.resource-list span{display:block;font-size:12px;color:var(--muted);margin-top:5px}footer{margin-top:46px;padding-top:22px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    code{overflow-wrap:anywhere}
+    @media(min-width:1500px){main{max-width:1440px}}@media(max-width:1100px){:root{--side:220px}.sidebar{padding:24px 18px}.grid{grid-template-columns:1fr}.diagram{flex-wrap:wrap}.diagram li:not(.arrow){flex-basis:25%}}@media(max-width:800px){html{scroll-padding-top:18px}.sidebar{display:none}main{margin-left:0;padding:20px 22px 48px}.mobile-nav{display:block;margin:0 0 24px}.mobile-nav nav{display:flex;flex-wrap:wrap;gap:8px 18px;padding-bottom:12px}.mobile-nav a{font-size:14px}.topline{align-items:flex-start;margin-bottom:20px}h1{font-size:42px}.lead{font-size:17px}.resource-list{grid-template-columns:1fr}.steps>li{padding-left:36px}section{padding-top:38px}.diagram{display:grid;grid-template-columns:1fr}.diagram .arrow{justify-self:center;transform:rotate(90deg)}.table-wrap{border-radius:8px}.search input{min-width:0;width:100%}.search{width:100%}pre{font-size:12px;padding:16px}th,td{padding:12px}.hero-links .button{flex-grow:1;text-align:center}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+    @media print{@page{margin:18mm}body{background:#fff;font-size:10pt}.sidebar,.mobile-nav,.topline button,.copy,.table-tools,.hero-links,.skip{display:none!important}main{margin:0;max-width:none;padding:0}h1{font-size:30pt}h2{font-size:20pt}h3{break-after:avoid}section{padding-top:22px}.lead{font-size:12pt}.hero{padding-bottom:16px}.grid{grid-template-columns:repeat(3,1fr)}.card{padding:12px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f0f3f3;color:#152c35;font-size:8pt}pre code{white-space:pre-wrap}.code-bar{background:#e5eeee;color:#152c35}.table-wrap{overflow:visible}.feature-table{min-width:0}table{font-size:8pt}th,td{padding:7px}thead{display:table-header-group}tr,.callout,.card{break-inside:avoid}.resource-list{grid-template-columns:1fr}a{color:inherit}details{break-inside:avoid}footer{margin-top:24px}}
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <aside class="sidebar" aria-label="Guide navigation">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">↗</span><span>Lakeflow<br>Community connectors</span></div>
+    <p class="eyebrow">CRM Analytics guide</p>
+    <nav aria-label="On this page">
+      <a href="#overview">Overview</a>
+      <a href="#features">Feature matrix</a>
+      <a href="#prerequisites">Prerequisites</a>
+      <a href="#install">Install</a>
+      <a href="#authentication">Configure OAuth</a>
+      <a href="#pipeline">Configure a pipeline</a>
+      <a href="#reference">Configuration reference</a>
+      <a href="#data-contract">Data &amp; snapshot behavior</a>
+      <a href="#operations">Operate &amp; size</a>
+      <a href="#troubleshooting">Troubleshoot</a>
+      <a href="#rollout">Customer &amp; partner rollout</a>
+      <a href="#resources">Resources &amp; support</a>
+    </nav>
+    <div class="sidebar-foot">Source: <code>crm_analytics</code><br>Package version: 0.1.0<br>Guide reviewed: 29 October 2026
+      <a href="https://github.com/laurentfabre/lakeflow-community-connectors/tree/feat/connector-crm_analytics">View connector branch ↗</a>
+      <a href="../LICENSE">Apache 2.0 license</a>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div class="topline"><span>CUSTOMER &amp; PARTNER DOCUMENTATION</span><button type="button" id="print-guide" hidden>Print / save PDF</button></div>
+    <details class="mobile-nav"><summary>On this page</summary><nav aria-label="Mobile navigation">
+      <a href="#overview">Overview</a><a href="#features">Features</a><a href="#prerequisites">Prerequisites</a><a href="#install">Install</a><a href="#authentication">OAuth</a><a href="#pipeline">Pipeline</a><a href="#reference">Configuration</a><a href="#data-contract">Data behavior</a><a href="#operations">Operations</a><a href="#troubleshooting">Troubleshooting</a><a href="#rollout">Rollout</a><a href="#resources">Resources</a>
+    </nav></details>
+    <header class="hero">
+      <div class="eyebrow">Salesforce → Databricks</div>
+      <h1>CRM Analytics<br><span>connector guide.</span></h1>
+      <p class="lead">Bring complete, version-pinned CRM Analytics dataset snapshots into your lakehouse. A practical guide to installation, configuration, operations, and evaluation.</p>
+      <div class="pills"><span class="pill status">Prototype · offline validation only</span><span class="pill">Community maintained</span><span class="pill">Full snapshots</span><span class="pill">OAuth + PKCE</span></div>
+      <div class="callout warning"><p><strong>Readiness at a glance.</strong> The source reader and synthetic tests are implemented. Live Salesforce access, OAuth renewal, source fidelity at scale, and actual Databricks Spark/Delta execution remain unvalidated. Plan an evaluation before committing to production use, capacity, or a freshness SLA.</p></div>
+      <div class="hero-links"><a class="button" href="#install">Start installation</a><a class="button secondary" href="#features">Explore feature matrix</a></div>
+    </header>
+
+    <section id="overview" aria-labelledby="overview-title">
+      <div class="eyebrow">01 / Understand the connector</div><h2 id="overview-title">From an Analytics dataset to governed tables</h2>
+      <p>The connector reads materialized <strong>Salesforce CRM Analytics datasets</strong> through Analytics REST and SAQL. Tables are identified by dataset IDs. Salesforce sObjects such as <code>Account</code> and <code>Opportunity</code> require a different source connector.</p>
+      <ol class="diagram" aria-label="Data flow">
+        <li><strong>CRM Analytics</strong>Materialized Default dataset + one selected version</li><li class="arrow" aria-hidden="true">→</li>
+        <li><strong>Community reader</strong>Pin schema, read all pages, validate completeness</li><li class="arrow" aria-hidden="true">→</li>
+        <li><strong>Snapshot pipeline</strong>Compare complete snapshots by stable business keys</li><li class="arrow" aria-hidden="true">→</li>
+        <li><strong>Unity Catalog</strong>Delta target for current state or snapshot history</li>
+      </ol>
+      <p class="subtle">The last two stages describe the framework integration path; source-to-target behavior still needs validation on your chosen Databricks runtime.</p>
+      <div class="grid">
+        <div class="card"><span class="number">SOURCE CONTRACT</span><h3>Complete snapshots</h3><p>Each capture reads every row of one version, including when that version has not changed. There is no source row-level change feed.</p></div>
+        <div class="card"><span class="number">IDENTITY CONTRACT</span><h3>Stable keys and visibility</h3><p>You supply unique, non-null business keys and approve a stable integration identity with full row visibility.</p></div>
+        <div class="card"><span class="number">PUBLICATION CONTRACT</span><h3>Validate before publishing</h3><p>Count, page, key, value, and metadata checks must all complete. A yielded prefix cannot be treated as a successful capture.</p></div>
+      </div>
+      <p>This community contribution has no official Databricks SLA, certification, or guaranteed compatibility. The published connector baseline is <code>eb8a4ee</code> on <code>feat/connector-crm_analytics</code>; the documented framework baseline is <code>ddc153b</code>. Record the exact revision you deploy.</p>
+    </section>
+
+    <section id="features" aria-labelledby="features-title">
+      <div class="eyebrow">02 / Evaluate fit</div><h2 id="features-title">Feature matrix</h2>
+      <p><strong>Implemented</strong> means covered by the implementation and offline tests. It does not imply live-source or runtime certification. <strong>Validate</strong> identifies an open environment-specific acceptance gate.</p>
+      <div class="table-tools" id="feature-tools" hidden><label class="search" for="feature-search">Find a capability <input id="feature-search" type="search" placeholder="Try OAuth, dates, deletes…" aria-controls="feature-body"></label><span id="feature-count" class="subtle" role="status" aria-live="polite"></span></div>
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Feature matrix, horizontally scrollable">
+        <table class="feature-table"><caption>Source capabilities and integration boundaries</caption><thead><tr><th scope="col">Capability</th><th scope="col">Status</th><th scope="col">Customer / partner implications</th></tr></thead><tbody id="feature-body">
+          <tr><th scope="row">Materialized Default datasets</th><td><span class="tag yes">Implemented</span></td><td>Dynamic discovery of datasets with a current materialized version. Use the exact 15- or 18-character dataset ID.</td></tr>
+          <tr><th scope="row">Version-pinned full extraction</th><td><span class="tag yes">Implemented</span></td><td>Schema, count queries, and every data page use one version. An expired pin fails; it does not switch to current.</td></tr>
+          <tr><th scope="row">Completeness and key checks</th><td><span class="tag yes">Implemented</span></td><td>Counts before/after, exact page lengths, terminal empty page, global unique/non-null composite keys, and metadata rechecks.</td></tr>
+          <tr><th scope="row">Composite business keys</th><td><span class="tag yes">Implemented</span></td><td>Operator-selected scalar dimensions or physical date strings. Dataset IDs and numeric measures are not row keys.</td></tr>
+          <tr><th scope="row">Explicit column selection</th><td><span class="tag yes">Implemented</span></td><td>Project supported physical fields and every key. Selection does not filter rows. Projection changes require migration.</td></tr>
+          <tr><th scope="row">Readable and legacy column names</th><td><span class="tag yes">Implemented</span></td><td>Readable names by default, source-name metadata, collision rejection, and <code>legacy_hex</code> compatibility. Destination name-length limits remain an open runtime concern.</td></tr>
+          <tr><th scope="row">Lossless decimals, strings, and nulls</th><td><span class="tag yes">Implemented</span></td><td>Measures use configurable decimals; rounding/overflow fails. Strings and non-key nulls are preserved. Verify live value equality.</td></tr>
+          <tr><th scope="row">Physical date fields</th><td><span class="tag check">Validate</span></td><td>Conservative XMD mapping exists. Date role overlaps and real source shapes need validation; epochs remain integers.</td></tr>
+          <tr><th scope="row">Bounded retries and extraction budgets</th><td><span class="tag yes">Implemented</span></td><td>Request/time limits abort the full capture. No truncation, universal safe volume, or hard cancellation guarantee.</td></tr>
+          <tr><th scope="row">OAuth authorization code + PKCE</th><td><span class="tag check">Validate</span></td><td>Spec declares shared <code>u2m</code>, <code>api refresh_token</code>. Exact callback, consent, refresh/rotation, and runtime token injection need live testing.</td></tr>
+          <tr><th scope="row">SCD Type 1 current state</th><td><span class="tag check">Validate</span></td><td>Framework snapshot comparison path exists. Validate updates, null transitions, removals, and failure recovery in Spark/Delta.</td></tr>
+          <tr><th scope="row">SCD Type 2 snapshot history</th><td><span class="tag check">Validate</span></td><td>Framework offers snapshot history. Changes between captures cannot be recovered; this is not a transaction audit feed.</td></tr>
+          <tr><th scope="row">Deletes inferred from snapshots</th><td><span class="tag check">Validate</span></td><td>Absence can remove a target row only after a complete, same-scope snapshot. Prove empty-source and permission-loss behavior.</td></tr>
+          <tr><th scope="row">Managed ingestion / Add Data UI</th><td><span class="tag check">Validate</span></td><td>Repository tooling builds wheels and custom connector assets. Availability, configuration, OAuth, and execution depend on the workspace.</td></tr>
+          <tr><th scope="row">Schema evolution</th><td><span class="tag check">Validate</span></td><td>Selected schema drift during a capture fails. Cross-capture additive changes and incompatible changes need runtime testing and a migration policy.</td></tr>
+          <tr><th scope="row">Large datasets and high offsets</th><td><span class="tag check">Validate</span></td><td>SAQL offset-pagination cost, stable ordering, source limits, quotas, and target freshness require representative measurement.</td></tr>
+          <tr><th scope="row">Native CDC / tombstone stream</th><td><span class="tag no">Unsupported</span></td><td>No row cursor, native delete feed, or source-event ordering. Unchanged versions still return all rows.</td></tr>
+          <tr><th scope="row">sObjects, live or external dataset types</th><td><span class="tag no">Unsupported</span></td><td>Only materialized Default CRM Analytics datasets fall within the connector contract.</td></tr>
+          <tr><th scope="row">Selected multivalue / calculated fields</th><td><span class="tag no">Unsupported</span></td><td>Exclude unsupported non-key fields with an explicit projection. Malformed metadata still fails.</td></tr>
+          <tr><th scope="row">Row filters, sampling, or total row caps</th><td><span class="tag no">Unsupported</span></td><td>The reader requires the complete row population. <code>page_size</code> controls transport pages only.</td></tr>
+          <tr><th scope="row">Append-only ingestion / parallel partitions</th><td><span class="tag no">Unsupported</span></td><td>Full snapshots are sequential. <code>APPEND_ONLY</code> is not supported for this source; do not share an instance concurrently.</td></tr>
+          <tr><th scope="row">Per-user / M2M source authentication</th><td><span class="tag no">Unsupported</span></td><td>This connector specifies one shared integration identity. Generic CLI auth modes are not proof of connector compatibility.</td></tr>
+          <tr><th scope="row">Immutable archive and ordered replay</th><td><span class="tag separate">Separate application</span></td><td>No capture job, manifest store, fencing, retention, or replay deployment ships in the connector wheel.</td></tr>
+          <tr><th scope="row">Source writes / binary bulk export</th><td><span class="tag no">Unsupported</span></td><td>Reader only. Binary-file eligibility, discovery, and format are research items, not an extraction path in this implementation.</td></tr>
+        </tbody></table>
+      </div>
+      <p id="feature-empty" class="callout" hidden>No matching capability. Try another term or clear the search.</p>
+    </section>
+
+    <section id="prerequisites" aria-labelledby="prerequisites-title">
+      <div class="eyebrow">03 / Prepare access</div><h2 id="prerequisites-title">Prerequisites and responsibilities</h2>
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Prerequisites and owners"><table><thead><tr><th scope="col">Owner</th><th scope="col">Prepare before setup</th></tr></thead><tbody>
+        <tr><th scope="row">Salesforce administrator</th><td>CRM Analytics entitlement; a materialized Default dataset; administrator-approved OAuth app; API access; stable integration identity; full dataset row visibility; verified REST version <code>NN.0</code> ≥ <code>53.0</code>.</td></tr>
+        <tr><th scope="row">Dataset owner</th><td>Exact dataset and version IDs; scalar physical fields in main extended metadata (XMD); unique/non-null source keys at the actual dataset grain; expected row count, data types, refresh cadence, and visibility contract.</td></tr>
+        <tr><th scope="row">Databricks administrator</th><td>Unity Catalog workspace and community-connector capability; permission to create/use a connection; approved catalog/schema, target table permissions, pipeline compute, and a UC Volume for wheels.</td></tr>
+        <tr><th scope="row">Platform / security team</th><td>Network egress from runtime compute to the Salesforce HTTPS API origin and approved OAuth endpoints; credential ownership and rotation; target table access policies and retention.</td></tr>
+        <tr><th scope="row">Implementer / partner</th><td>Git, Python ≥ 3.10, current Databricks CLI, a deliberately selected profile, and a compatible pipeline runtime. Package metadata is not a certified runtime compatibility matrix.</td></tr>
+      </tbody></table></div>
+      <p>Typical UC privileges include <code>CREATE CONNECTION</code> to create a connection and <code>USE CONNECTION</code> to use it; target access includes <code>USE CATALOG</code>, <code>USE SCHEMA</code>, <code>CREATE TABLE</code>, and appropriate write rights. Wheel staging needs appropriate Volume read/write rights and creation rights if the tool creates it. Have your administrator confirm the exact grants for the selected deployment path and execution identity.</p>
+      <div class="callout"><p><strong>Agree on visibility first.</strong> Salesforce row-level security is evaluated for the integration identity. Source permissions do not automatically become equivalent Databricks policies. Review the resulting table's audience and apply Unity Catalog permissions or downstream policies explicitly.</p></div>
+    </section>
+
+    <section id="install" aria-labelledby="install-title">
+      <div class="eyebrow">04 / Install the tooling</div><h2 id="install-title">Start from the connector branch</h2>
+      <p>Use this fork and branch: CRM Analytics is not assumed to be present in the upstream default branch. The commands below install local tooling; later connection and pipeline commands create workspace resources.</p>
+      <ol class="steps">
+        <li><h3>Clone and record the revision</h3>
+          <div class="code-block"><div class="code-bar"><span>Terminal · fresh checkout</span><button class="copy" type="button" hidden>Copy</button></div><pre><code>git clone --branch feat/connector-crm_analytics --single-branch \
+  https://github.com/laurentfabre/lakeflow-community-connectors.git
+cd lakeflow-community-connectors
+git rev-parse HEAD</code></pre></div>
+          <p>Record the revision with your deployment evidence. Use a reviewed commit and matching framework/connector wheels for repeatable environments.</p>
+        </li>
+        <li><h3>Install in an isolated Python environment</h3>
+          <div class="code-block"><div class="code-bar"><span>Terminal · macOS / Linux</span><button class="copy" type="button" hidden>Copy</button></div><pre><code>python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install build \
+  -e . \
+  -e ./tools/community_connector \
+  -e ./src/databricks/labs/community_connector/sources/crm_analytics
+community-connector --help</code></pre></div>
+          <p>On Windows PowerShell, use <code>py -m venv .venv</code> and activate with <code>.venv\Scripts\Activate.ps1</code>. This installs the framework, source package, deployment CLI, and build frontend locally. Databricks supplies PySpark at runtime; do not install a replacement PySpark on the cluster.</p>
+        </li>
+        <li><h3>Choose the workspace explicitly</h3>
+          <p>Install a current <a href="https://docs.databricks.com/aws/en/dev-tools/cli/install">Databricks CLI</a> separately. List profiles, then replace the profile placeholder with your chosen environment.</p>
+          <div class="code-block"><div class="code-bar"><span>Terminal · choose a profile before continuing</span><button class="copy" type="button" hidden>Copy</button></div><pre><code>databricks --version
+databricks auth profiles
+databricks current-user me --profile &lt;PROFILE&gt;
+export DATABRICKS_CONFIG_PROFILE='&lt;PROFILE&gt;'</code></pre></div>
+          <p>The community CLI reads <code>DATABRICKS_CONFIG_PROFILE</code>; Databricks CLI examples use <code>--profile</code>. PowerShell uses <code>$env:DATABRICKS_CONFIG_PROFILE = '&lt;PROFILE&gt;'</code>. Check that existing host/token environment variables are not selecting a different workspace.</p>
+        </li>
+      </ol>
+      <details><summary>Optional: make a custom connector tile available in Add Data</summary>
+        <p>Where your workspace supports community connector assets, this repository command builds/uploads the framework and source wheels and publishes a custom tile. Replace the Volume path and confirm its access rights. This provisions workspace assets; it does not validate Salesforce authentication or run ingestion.</p>
+        <div class="code-block"><div class="code-bar"><span>Terminal · workspace setup</span><button class="copy" type="button" hidden>Copy</button></div><pre><code>community-connector publish crm_analytics \
+  --spec src/databricks/labs/community_connector/sources/crm_analytics/connector_spec.yaml \
+  --volume-path /Volumes/&lt;CATALOG&gt;/&lt;SCHEMA&gt;/&lt;VOLUME&gt;/packages</code></pre></div>
+        <p>Open <strong>Add Data → Community connectors</strong> and select the custom Salesforce CRM Analytics tile. Workspace UI availability and behavior must be checked in your environment. See the <a href="../tools/community_connector/README.md">CLI guide</a> for prebuilt wheels and publication options.</p>
+      </details>
+    </section>
+
+    <section id="authentication" aria-labelledby="authentication-title">
+      <div class="eyebrow">05 / Authorize Salesforce</div><h2 id="authentication-title">Configure the app and UC connection</h2>
+      <p>Databricks workspace authentication and Salesforce source OAuth are separate. This connector declares <strong>shared user-to-machine authorization</strong>: one approved integration identity signs in once, and the connection layer owns token renewal and injects the current access token.</p>
+      <ol>
+        <li>Have a Salesforce administrator create an approved <strong>External Client App</strong> or use an approved existing connected app. New connected-app creation is restricted from Spring ’26; follow current Salesforce guidance.</li>
+        <li>Enable authorization code OAuth with PKCE. The spec requests <code>api</code> and <code>refresh_token</code> (also described by Salesforce as <code>offline_access</code>). Apply your organization's app-access and refresh policies; keep the secret requirements appropriate for this confidential-client flow.</li>
+        <li>Register the exact callback for the selected path. For the Databricks UI, confirm the callback shown by the workspace; the documented pattern is <code>https://&lt;WORKSPACE_HOST&gt;/login/oauth/http.html</code>. The local CLI uses <code>http://127.0.0.1:&lt;PORT&gt;/callback</code>. Scheme, host, port, and path must match; do not assume wildcard or dynamic-port acceptance.</li>
+        <li>Create a <code>COMMUNITY</code> connection for <code>crm_analytics</code> through the custom connector setup. Enter the app consumer key/secret, trusted API origin, explicit REST version, and the allowlist below. Complete browser sign-in as the integration identity.</li>
+        <li>Validate consent, PKCE, connection grants, refresh/rotation, runtime token injection, and the match between the authorized org and <code>instance_url</code> before scheduling.</li>
+      </ol>
+      <div class="table-wrap" tabindex="0" role="region" aria-label="OAuth endpoints"><table><thead><tr><th scope="col">Setting</th><th scope="col">Production-login default / rule</th></tr></thead><tbody>
+        <tr><th scope="row">Authorization endpoint</th><td><code>https://login.salesforce.com/services/oauth2/authorize</code></td></tr>
+        <tr><th scope="row">Token endpoint</th><td><code>https://login.salesforce.com/services/oauth2/token</code></td></tr>
+        <tr><th scope="row">Sandbox / My Domain</th><td>Use the approved environment's <code>authorization_endpoint</code> and <code>token_endpoint</code> overrides at connection creation. Validate them with your administrator.</td></tr>
+        <tr><th scope="row">Data API origin</th><td><code>instance_url</code> identifies the authorized org, e.g. <code>https://example.my.salesforce.com</code>. Do not use a generic login endpoint in place of the org API origin.</td></tr>
+      </tbody></table></div>
+      <h3>Exact source table-option allowlist</h3>
+      <p>For manual connection setup, set <code>externalOptionsAllowList</code> to this exact value. The repository CLI derives it from the local spec and adds its framework transport options automatically.</p>
+      <div class="code-block"><div class="code-bar"><span>Connection setting · externalOptionsAllowList</span><button class="copy" type="button" hidden>Copy</button></div><pre><code>source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds</code></pre></div>
+      <details><summary>Alternative: create the connection with the community CLI</summary>
+        <p>Confirm that Salesforce accepts the exact loopback callback first. A fixed port makes the requested callback predictable: the example uses <code>http://127.0.0.1:8020/callback</code>. Fixed-port registration still requires live acceptance testing.</p>
+        <p>Populate <code>CRM_CONNECTION_OPTIONS</code> in a private shell through your approved secret tooling. Its JSON contains <code>client_id</code>, <code>client_secret</code>, <code>instance_url</code>, and <code>api_version</code>, plus endpoint overrides when needed. Keep credentials out of source files, pipeline specs, shell history, and shared logs. The CLI transports options as a command argument, which may be visible to local process inspection; use the UI or an approved private environment for secrets.</p>
+        <div class="code-block"><div class="code-bar"><span>Terminal · requires privately supplied CRM_CONNECTION_OPTIONS</span><button class="copy" type="button" hidden>Copy</button></div><pre><code>community-connector create_connection crm_analytics crm_analytics_connection \
+  --spec src/databricks/labs/community_connector/sources/crm_analytics/connector_spec.yaml \
+  --redirect-port 8020 \
+  --options "${CRM_CONNECTION_OPTIONS:?Supply connection JSON securely}"
+unset CRM_CONNECTION_OPTIONS</code></pre></div>
+        <p>The local spec selects <code>u2m</code> and supplies OAuth defaults. This command opens browser authorization and creates the UC connection. Do not select generic <code>m2m</code> or <code>u2m_per_user</code> modes for this connector.</p>
+      </details>
+      <div class="callout warning"><p><strong>Renewal is a connection responsibility.</strong> The reader itself does not refresh tokens. HTTP 401 fails immediately; renew or reauthorize the connection, then retry the complete capture. Never add an access token to the pipeline spec as a workaround.</p></div>
+    </section>
+
+    <section id="pipeline" aria-labelledby="pipeline-title">
+      <div class="eyebrow">06 / Define your capture</div><h2 id="pipeline-title">Configure one dataset first</h2>
+      <p>Save the following as <code>crm-analytics-pipeline.json</code> in your checkout. Replace placeholders and example field names with values from the selected dataset's main XMD. The example assumes <code>Account.Id</code> and <code>FiscalYear</code> are string dimensions whose tuple is unique and non-null; <code>Amount</code> is a scalar measure.</p>
+      <div class="code-block"><div class="code-bar"><span>crm-analytics-pipeline.json · bare community CLI specification</span><button class="copy" type="button" hidden>Copy</button></div><pre><code id="pipeline-example">{
+  "connection_name": "crm_analytics_connection",
+  "objects": [
+    {
+      "table": {
+        "source_table": "&lt;DATASET_ID&gt;",
+        "destination_catalog": "&lt;CATALOG&gt;",
+        "destination_schema": "&lt;SCHEMA&gt;",
+        "destination_table": "account_analytics",
+        "table_configuration": {
+          "source_primary_keys": ["Account.Id", "FiscalYear"],
+          "selected_columns": ["Account.Id", "FiscalYear", "Amount"],
+          "supported_scope": "scalar_full_visibility",
+          "scope_fingerprint": "&lt;APPROVED_STABLE_VISIBILITY_SCOPE&gt;",
+          "version_id": "&lt;PINNED_VERSION_ID&gt;",
+          "column_name_mode": "readable",
+          "decimal_precision": "38",
+          "decimal_scale": "18",
+          "max_keys": "1000000",
+          "max_query_requests": "2000",
+          "max_read_seconds": "1800",
+          "scd_type": "SCD_TYPE_1"
+        }
+      }
+    }
+  ]
+}</code></pre></div>
+      <p>Source keys use <strong>original physical names</strong>. Normally omit <code>primary_keys</code>: the connector supplies the destination names, e.g. <code>Account__Id</code>. A dataset ID identifies a table, not an individual row. The scope fingerprint should be a stable operator-managed label for the approved identity/visibility contract, never a token, run ID, or timestamp.</p>
+      <h3>Create and run an evaluation pipeline</h3>
+      <p>The repository CLI's default path builds and uploads both wheels to a UC Volume and creates a managed ingestion pipeline. It accepts the bare spec above. These are evaluation setup commands; the connector's managed runtime behavior remains a live-validation gate.</p>
+      <div class="code-block"><div class="code-bar"><span>Terminal · creates assets and starts an ingestion update</span><button class="copy" type="button" hidden>Copy</button></div><pre><code>community-connector create_pipeline crm_analytics crm_analytics_eval \
+  --pipeline-spec crm-analytics-pipeline.json \
+  --catalog &lt;CATALOG&gt; --target &lt;SCHEMA&gt; \
+  --volume-path /Volumes/&lt;CATALOG&gt;/&lt;SCHEMA&gt;/&lt;VOLUME&gt;/packages
+
+community-connector show_pipeline crm_analytics_eval
+community-connector run_pipeline crm_analytics_eval</code></pre></div>
+      <p>Use the pipeline URL and update ID to inspect final completion and event logs; starting an update does not establish successful extraction. Compare the entire target with the pinned source before accepting the result. Add one table object per additional dataset, each with its own keys, version, and approved scope.</p>
+      <details><summary>How this spec relates to other deployment paths</summary>
+        <p>This is a <strong>community CLI input</strong>, not a direct request body for <code>databricks pipelines create --json</code>. A full managed API body uses <code>ingestion_definition</code> and an appropriate environment/dependency configuration; let the repository tooling assemble it and validate it in your workspace.</p>
+        <p>The legacy <code>--use-workspace-pipeline</code> path clones a repository and runs an <code>ingest.py</code> entrypoint; the source README shows the corresponding <code>pipeline_spec</code> wrapper. If you use that path, explicitly configure this fork and the CRM Analytics branch, since generic tooling defaults may point to upstream. Do not mix the three input shapes.</p>
+      </details>
+      <div class="callout danger"><p><strong>A fixed pin intentionally reads a fixed version.</strong> Before each new capture, orchestration must resolve the intended new version and pass that same <code>version_id</code> through schema discovery and extraction. The stock reader does not supply a version-advancement scheduler. Omitting the pin across independent Spark contexts can resolve different versions and is unsafe.</p></div>
+      <h3>Schedule after acceptance</h3>
+      <p>Use triggered runs, scheduled through a Lakeflow Job after the dataset refresh and version-resolution step. Set the cadence from measured refresh timing, extraction duration, and source quotas. Test unchanged versions, overlapping triggers, refresh races, restarts, and expired versions before enabling a recurring schedule.</p>
+    </section>
+
+    <section id="reference" aria-labelledby="reference-title">
+      <div class="eyebrow">07 / Keep configuration in the right place</div><h2 id="reference-title">Configuration reference</h2>
+      <h3>Connection settings</h3><p>Credentials and HTTP transport settings belong in the UC connection. The spec marks both app identity fields as secret. <code>access_token</code> is injected by the connection, not a normal setup parameter.</p>
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Connection settings"><table><thead><tr><th scope="col">Setting</th><th scope="col">Required / default</th><th scope="col">Contract</th></tr></thead><tbody>
+        <tr><th scope="row"><code>client_id</code></th><td>Required; secret in spec</td><td>OAuth app consumer key.</td></tr>
+        <tr><th scope="row"><code>client_secret</code></th><td>Required; secret</td><td>OAuth app consumer secret. Store in the connection.</td></tr>
+        <tr><th scope="row"><code>instance_url</code></th><td>Required</td><td>Trusted HTTPS origin ending in <code>.salesforce.com</code>. No resource path, query, fragment, credentials, or port other than 443.</td></tr>
+        <tr><th scope="row"><code>api_version</code></th><td>Required; no default</td><td>Explicit org-supported <code>NN.0</code>, at least <code>53.0</code>. A published guide version does not establish org availability.</td></tr>
+        <tr><th scope="row"><code>page_size</code></th><td>1,000</td><td>1–10,000 rows per SAQL data page; never a total row cap.</td></tr>
+        <tr><th scope="row"><code>timeout_seconds</code></th><td>30</td><td>1–300 seconds for per-request connect/read timeout; not a capture deadline.</td></tr>
+        <tr><th scope="row"><code>max_retries</code></th><td>3</td><td>0–8 additional attempts for connection/timeouts, HTTP 429 or 500/502/503/504. HTTP 401 fails immediately.</td></tr>
+        <tr><th scope="row"><code>max_retry_delay_seconds</code></th><td>30</td><td>1–120 seconds. A valid <code>Retry-After</code> beyond the cap aborts rather than retrying too early.</td></tr>
+        <tr><th scope="row"><code>externalOptionsAllowList</code></th><td>Required for manual setup</td><td>Use the <a href="#authentication">exact source allowlist</a>; the CLI derives it from the local spec.</td></tr>
+      </tbody></table></div>
+      <h3>Dataset and destination</h3>
+      <p>These settings go directly under each <code>objects[].table</code>, outside <code>table_configuration</code>.</p>
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Source and destination settings"><table><thead><tr><th scope="col">Setting</th><th scope="col">Required / fallback</th><th scope="col">Contract</th></tr></thead><tbody>
+        <tr><th scope="row"><code>source_table</code></th><td>Required</td><td>Exact 15- or 18-character dataset ID, not a label or API name.</td></tr>
+        <tr><th scope="row"><code>destination_catalog</code></th><td>Pipeline default</td><td>Approved Unity Catalog destination.</td></tr>
+        <tr><th scope="row"><code>destination_schema</code></th><td>Pipeline default</td><td>Approved target schema.</td></tr>
+        <tr><th scope="row"><code>destination_table</code></th><td>Source table ID</td><td>Prefer a descriptive explicit table name, e.g. <code>account_analytics</code>.</td></tr>
+      </tbody></table></div>
+      <h3>Source table options</h3>
+      <p>Set under <code>table_configuration</code>. JSON specs accept arrays; a string-only surface requires JSON array strings such as <code>["Account.Id","FiscalYear"]</code>, not Python list syntax. Unknown source options fail.</p>
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Source table configuration"><table><thead><tr><th scope="col">Option</th><th scope="col">Required / default</th><th scope="col">Contract</th></tr></thead><tbody>
+        <tr><th scope="row"><code>source_primary_keys</code></th><td>Required</td><td>Nonempty array of distinct physical source names. Keys must be scalar dimensions or physical date strings, unique/non-null across the full snapshot; numeric measures/epochs cannot be keys.</td></tr>
+        <tr><th scope="row"><code>supported_scope</code></th><td>Required</td><td>Exactly <code>scalar_full_visibility</code>. Operator attestation to supported scalar projection and stable full row visibility.</td></tr>
+        <tr><th scope="row"><code>scope_fingerprint</code></th><td>Required</td><td>Nonblank stable identifier, ≤ 1,024 characters, for the approved principal/visibility scope. A change requires an approved new baseline.</td></tr>
+        <tr><th scope="row"><code>version_id</code></th><td>Current version resolved per context if omitted</td><td>Exact 15- or 18-character version ID. Explicitly pin across independent schema/read contexts. Expiration fails the capture.</td></tr>
+        <tr><th scope="row"><code>column_name_mode</code></th><td><code>readable</code></td><td><code>readable</code> or <code>legacy_hex</code>. Changing names requires migration; preserve legacy mode for existing hex-named targets.</td></tr>
+        <tr><th scope="row"><code>selected_columns</code></th><td>All physical fields</td><td>Nonempty distinct physical-name array including every key. Input order is normalized. Unknown/derived/unsafe selections fail; selection changes require migration.</td></tr>
+        <tr><th scope="row"><code>decimal_precision</code></th><td>38</td><td>1–38, shared by all measures. A lossless contract is required.</td></tr>
+        <tr><th scope="row"><code>decimal_scale</code></th><td>18</td><td>0 through configured precision. Lowering precision below 18 also requires lowering scale. Overflow or rounding fails.</td></tr>
+        <tr><th scope="row"><code>max_keys</code></th><td>1,000,000</td><td>1–10,000,000; bounds the in-memory full-snapshot uniqueness set. Exceeding it fails; it does not truncate.</td></tr>
+        <tr><th scope="row"><code>max_query_requests</code></th><td>2,000</td><td>1–100,000 actual SAQL HTTP attempts per read, including retries, two counts, and terminal page. Metadata GETs are excluded.</td></tr>
+        <tr><th scope="row"><code>max_read_seconds</code></th><td>1,800</td><td>1–86,400 seconds from read request through iterator exhaustion, including cold metadata, retry waits, and consumer pauses. Cooperative elapsed budget, not hard cancellation.</td></tr>
+      </tbody></table></div>
+      <h3>Common framework controls</h3>
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Framework table configuration"><table><thead><tr><th scope="col">Option</th><th scope="col">Usage for this connector</th></tr></thead><tbody>
+        <tr><th scope="row"><code>scd_type</code></th><td><code>SCD_TYPE_1</code> by default, or <code>SCD_TYPE_2</code> snapshot history. <code>APPEND_ONLY</code> is unsupported for this source.</td></tr>
+        <tr><th scope="row"><code>primary_keys</code></th><td>Normally omit. If supplied, must exactly match mapped destination counterparts of <code>source_primary_keys</code>, in the same order. The shared parser removes this override before the reader can check it.</td></tr>
+        <tr><th scope="row"><code>sequence_by</code></th><td>Leave unset. There is no row cursor; this option does not order dataset versions for the snapshot pipeline.</td></tr>
+        <tr><th scope="row"><code>cluster_by</code></th><td>Optional mapped destination columns for Liquid Clustering. Consumed by the framework, not the source reader.</td></tr>
+      </tbody></table></div>
+    </section>
+
+    <section id="data-contract" aria-labelledby="data-title">
+      <div class="eyebrow">08 / Preserve meaning</div><h2 id="data-title">Data, names, and deletion behavior</h2>
+      <h3>Data type mapping</h3>
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Data type mappings"><table><thead><tr><th scope="col">Physical source field</th><th scope="col">Destination type</th><th scope="col">Behavior</th></tr></thead><tbody>
+        <tr><th scope="row">Scalar dimension</th><td><code>STRING</code></td><td>Preserves strings, including leading zeros. Arrays, objects, and non-string dimensions fail.</td></tr>
+        <tr><th scope="row">Scalar measure</th><td><code>DECIMAL(p,s)</code></td><td>Default <code>DECIMAL(38,18)</code>; exact numeric parsing; no implicit rounding or overflow.</td></tr>
+        <tr><th scope="row">XMD date epochDay / epochSecond</th><td><code>BIGINT</code></td><td>Exact signed 64-bit integer. No implicit conversion to a timestamp.</td></tr>
+        <tr><th scope="row">Other supported physical date fields</th><td><code>STRING</code></td><td>Includes fullField and date parts. Parse downstream using an explicit format/timezone policy.</td></tr>
+        <tr><th scope="row">Null non-key field</th><td>Null of declared type</td><td>Retained as null; never replaced by zero or an empty string. Null keys fail.</td></tr>
+      </tbody></table></div>
+      <h3>Column naming and upgrades</h3>
+      <p>Readable mode preserves ASCII letters/digits/underscores, changes dots to double underscores (<code>Account.Id → Account__Id</code>), and escapes other code points as <code>_uXXXX_</code> with lowercase hexadecimal. Digit-leading names and the reserved name <code>none</code> receive <code>c_</code>. Original names remain in Spark field <code>source_name</code> metadata and descriptor <code>column_mapping</code>.</p>
+      <p>Case-insensitive collisions fail: <code>Account.Id</code> with <code>Account__Id</code>, or <code>Id</code> with <code>id</code>. Resolve the source schema, explicitly exclude a non-key collision, or deliberately use <code>legacy_hex</code>, where <code>Account.Id → c_4163636f756e742e4964</code>. Escaping can expand long names; the implementation has no destination-name-length guard, so validate names against the target runtime's limits.</p>
+      <p>Existing hex-named targets must retain <code>legacy_hex</code> until an approved migration. Naming mode, source keys, projection, visibility, and schema define the data contract. All-column mode and explicit selection have different configuration identities even if they currently select the same fields. Review externally keyed state after upgrading to the projection-aware fingerprint. Budget-only tuning does not change the data fingerprint.</p>
+      <h3>Empty snapshots, updates, and deletes</h3>
+      <p>A successful snapshot is the complete current row population of the pinned version under the approved scope. The framework can compare it with the prior accepted snapshot to infer inserts, updates, and removals. A positively validated empty snapshot can remove <strong>all</strong> prior rows. An unchanged version still returns the full row set.</p>
+      <div class="callout danger"><p><strong>Never substitute empty data for an error.</strong> A 403, missing version, shortened page, duplicate key, count mismatch, warning, or failed validation is a failed capture. Discard rows from that attempt. Permission loss and visibility changes must not be interpreted as business deletions.</p></div>
+      <p>Count and metadata checks cannot detect every equal-count permission or value change. Full visibility is an operator contract that needs independent source-to-target validation. Salesforce does not guarantee unlimited historical version retention or immutable XMD/security properties. Snapshot history also cannot recover updates that occur between captures.</p>
+    </section>
+
+    <section id="operations" aria-labelledby="operations-title">
+      <div class="eyebrow">09 / Run with evidence</div><h2 id="operations-title">Sizing, monitoring, and recovery</h2>
+      <h3>Estimate the minimum query allowance</h3>
+      <p>A retry-free capture requires at least:</p>
+      <div class="code-block"><div class="code-bar"><span>SAQL attempt lower bound</span><button class="copy" type="button" hidden>Copy</button></div><pre><code>ceil(totalRowCount / page_size) + 3
+
+# 407 rows at page_size 100: 5 data pages + 2 counts + 1 terminal = 8
+# A positively validated empty dataset still needs 3 attempts.</code></pre></div>
+      <p>Failed attempts and retries consume <code>max_query_requests</code>; metadata GETs do not. A budget below the minimum is rejected before SAQL extraction. The allowance is per read, not an org-wide quota. Discovery pages contain up to 200 datasets and are separate from extraction <code>page_size</code>.</p>
+      <p>Memory grows with the complete key-validation set. Estimate using representative key widths and available executor memory; <code>max_keys</code> is a guard, not a capacity recommendation. Elapsed time includes consumer delays and retries. Raising budgets does not solve offset-pagination cost or source limits; validate high offsets and representative sizes live.</p>
+      <h3>Capture these operational signals</h3>
+      <ul>
+        <li>Dataset/version, integration scope reference, package/framework revisions, projection/naming mode, expected/extracted/target counts, and capture start/end.</li>
+        <li>Pipeline/update IDs, final state, failures, retries, source quotas, duration, and target freshness relative to the intended dataset version.</li>
+        <li>Completed source read evidence: <code>query_requests</code>, <code>elapsed_seconds</code>, <code>max_query_requests</code>, and <code>max_read_seconds</code>. The reader's <code>get_read_evidence</code> helper only succeeds after full exhaustion; automatic dashboard publication of these values is not supplied.</li>
+      </ul>
+      <p>Monitor final pipeline state and retained target state as well as reader evidence. Reader completion alone does not prove atomic downstream Delta application. Keep secrets, OAuth grants, cookies, and business-row payloads out of support logs.</p>
+      <h3>Recover a failed capture</h3>
+      <ol>
+        <li>Pause recurring runs if failures involve identity/visibility, incomplete data, or repeated source pressure. Preserve the last accepted target and its evidence.</li>
+        <li>Investigate the exact failed version, key contract, source response category, permissions, and budgets. Reject the partial attempt; do not mark it complete.</li>
+        <li>Retry the <strong>entire</strong> same pinned snapshot if it remains available and valid. If it expired, select a new approved capture/version rather than silently substituting one into the failed attempt.</li>
+        <li>Validate source-to-target equality and restart/retry behavior before resuming the schedule. Do not reset checkpoints, enable full refresh, or replace the baseline without assessing target and history impact.</li>
+      </ol>
+      <p>For upgrades, preserve the deployed artifacts/spec and test the replacement against an isolated destination first. Rollback requires compatible package, schema, keys, scope, and checkpoint state; do not assume a package downgrade reverses a data migration.</p>
+    </section>
+
+    <section id="troubleshooting" aria-labelledby="troubleshooting-title">
+      <div class="eyebrow">10 / Diagnose a failed run</div><h2 id="troubleshooting-title">Troubleshooting playbook</h2>
+      <p>Start with the final pipeline/update status, the failed dataset/version, and a sanitized error. Every failed extraction requires a complete retry after the cause is resolved.</p>
+      <details><summary>OAuth callback rejected, browser error, or consent fails</summary><p>Compare the complete requested URI with the app registration. Check the UI host or exact <code>http://127.0.0.1:&lt;PORT&gt;/callback</code> used by the selected local CLI. Use <code>--redirect-port</code> for a deliberate fixed local port. Confirm production/sandbox/My Domain endpoints, app access, PKCE, and requested scopes. Validate UI and local CLI paths separately; do not relax app policies or assume wildcard acceptance.</p></details>
+      <details><summary>HTTP 401 / “authentication expired or invalid”</summary><p>Renew or reauthorize through the UC connection, then retry the full snapshot. Check refresh-token policy and current-token injection into runtime requests. The reader does not renew tokens, and a Databricks workspace token is not a Salesforce access token.</p></details>
+      <details><summary>HTTP 403, missing dataset, or missing / expired version</summary><p>Verify the integration identity, API entitlement, sharing/security predicates, dataset type, API version, and exact dataset/version IDs. Discovery includes only materialized Default datasets. Do not substitute a different dataset or a new current version into an existing attempt. Investigate permission changes before allowing snapshot-inferred deletes.</p></details>
+      <details><summary>Count mismatch, short page, warnings, or metadata drift</summary><p>Abort publication. Recheck the pinned version, source refresh/retention, full visibility, stable ordering, and selected field metadata. Validate all pages and the terminal empty page. A count match alone does not prove value fidelity or constant permissions. Empty aggregate results are not accepted as affirmative proof of zero rows.</p></details>
+      <details><summary>“Null or duplicate primary key in snapshot”</summary><p>Confirm the dataset's actual grain and use all required physical string dimensions/date-string fields in <code>source_primary_keys</code>. Inspect cross-page duplicates and null keys in the source. Do not drop rows, deduplicate, or invent a mutable row hash to make the test pass.</p></details>
+      <details><summary>Unsupported XMD, date roles, multivalue fields, or decimal overflow</summary><p>Compare main XMD with real values. Explicitly select supported scalar physical fields and every key; malformed metadata still fails even for unselected fields. Date role overlaps are conservatively rejected. Configure sufficient decimal precision/scale without rounding. Treat selected schema changes as a migration decision.</p></details>
+      <details><summary>Invalid selected_columns, destination keys, or unknown table options</summary><p>Use a nonempty JSON array of distinct physical source names, including all source keys. Put source options in <code>table_configuration</code> and credentials in the connection. Verify <code>externalOptionsAllowList</code> against the local spec. Normally omit <code>primary_keys</code>; if used, it must contain mapped destination names in source-key order. Remove filters, sample caps, and unsupported options.</p></details>
+      <details><summary>Destination column collision or target name-length failure</summary><p>Inspect case-only, dot/underscore, and escaped-name collisions in the projection. Rename the source field, exclude a non-key conflicting field, or deliberately choose <code>legacy_hex</code> with a new baseline/migration. Check expanded mapped-name lengths against runtime limits; there is no connector length guard. Never silently rename existing keys.</p></details>
+      <details><summary>max_keys, query budget, or elapsed budget exceeded</summary><p>Discard the incomplete read. Assess full-snapshot key memory, the query lower bound, retries, offset cost, network duration, and downstream pauses. Increase limits only within an approved measured resource envelope, then retry the full read. No budget setting is a supported row-sampling mechanism.</p></details>
+      <details><summary>HTTP 429 / 5xx, repeated timeouts, or Retry-After beyond policy</summary><p>Check Salesforce quotas and observed request duration. Reduce concurrent captures or retry later. Tune transport limits and scheduling using measured cost. The reader retries only the configured transient categories and honors its delay cap by aborting when necessary. Do not shorten a server-supplied delay to force an earlier retry.</p></details>
+      <details><summary>Pipeline succeeds but data stays on an old dataset version</summary><p>Inspect <code>version_id</code> and the orchestration step that resolves pins. A fixed version intentionally rereads the same data. Publish a new consistent pin for the next capture and compare the intended source refresh with target freshness. Verify the integration identity still sees that version.</p></details>
+      <details><summary>Wrong workspace, missing connector, wheel, or UC permission error</summary><p>Verify <code>DATABRICKS_CONFIG_PROFILE</code>, conflicting host/token environment variables, and the Databricks CLI <code>--profile</code>. Run setup from this fork's checkout. Confirm community capability, matching framework/source wheels, source name <code>crm_analytics</code>, Volume access by the execution identity, and destination grants. Use the CLI's actual <code>--help</code> if a flag differs from this guide.</p></details>
+      <details><summary>Unexpected target removals or identity / sharing change</summary><p>Pause the schedule and preserve the last accepted target/evidence. Compare identity, sharing rules, security predicates, scope fingerprint, keys, projection, and schema with the approved baseline. A permission change can have the same row count and escape count checks. Approve an explicit baseline/migration and recovery plan before continuing; do not merely change the fingerprint and reuse deletion history.</p></details>
+    </section>
+
+    <section id="rollout" aria-labelledby="rollout-title">
+      <div class="eyebrow">11 / Make the handoff repeatable</div><h2 id="rollout-title">Customer and partner rollout</h2>
+      <p>Start with a small representative dataset, then expand only after the source contract and runtime behavior are established. The existing offline report records <strong>289 passing tests and 2 expected skips</strong>; those are historical synthetic results, not customer certification.</p>
+      <h3>Evaluation acceptance checklist</h3>
+      <ul class="checklist">
+        <li>Confirm OAuth callback, PKCE consent, refresh/rotation, runtime token injection, and the authorized org/identity.</li>
+        <li>Read a multi-page dataset and compare <strong>every key and value</strong> with the pinned source, including decimals, dates, Unicode, leading zeros, and nulls.</li>
+        <li>Test source refreshes, unchanged versions, expired pins, version-resolution races, and actual XMD/date/empty-count shapes.</li>
+        <li>Exercise inserts, updates, transitions to null, removals, and a positively empty dataset in an isolated deletion-sensitive target.</li>
+        <li>Prove partial reads, source failures, permission loss, and failed final validation do not publish partial or empty results.</li>
+        <li>Verify actual Spark/Delta behavior, full retries, checkpoint restarts, and idempotent recovery across interrupted runs.</li>
+        <li>Agree on additive schema evolution, incompatible-change policy, projection/naming migrations, and baseline approval.</li>
+        <li>Measure representative volume/high offsets, total API use including retries/metadata, memory, runtime, compute cost, and two refresh cycles against the agreed freshness objective.</li>
+        <li>Confirm target governance, credential owner, incident response, schedule ownership, and a tested rollback/recovery plan.</li>
+      </ul>
+      <h3>Partner handover package</h3>
+      <p>Provide a sanitized spec; exact repo commit and wheel versions/checksums; workspace/runtime and pipeline/update IDs; dataset/version and approved scope references; source-key and naming mappings; full reconciliation results; measured operating envelope; known limitations; and named source/platform/support owners. Share credentials only through the customer's approved secret channel.</p>
+      <div class="callout"><p><strong>Archive requirements need their own scope.</strong> If a customer needs immutable snapshot storage or ordered replay, design and validate that application separately: durable completion, writer fencing, publication order, schema evolution, idempotent recovery, and retention for pending consumers. These capabilities are not delivered by this connector package.</p></div>
+      <h3>Cost and commercial expectations</h3>
+      <p>Budget for Databricks pipeline compute, wheel/artifact and Delta storage, optional job orchestration, and Salesforce API/CRM Analytics entitlements and quotas. Each scheduled capture reads the full selected snapshot. No connector-specific benchmark, pricing guarantee, maximum safe volume, or freshness SLA has been established; measure the intended workload and confirm current vendor pricing.</p>
+    </section>
+
+    <section id="resources" aria-labelledby="resources-title">
+      <div class="eyebrow">12 / Go to the source</div><h2 id="resources-title">Resources and support</h2>
+      <ul class="resource-list">
+        <li><a href="../src/databricks/labs/community_connector/sources/crm_analytics/README.md">Connector README</a><span>Detailed source contract, setup, examples, and behavior.</span></li>
+        <li><a href="../src/databricks/labs/community_connector/sources/crm_analytics/connector_spec.yaml">Connection specification</a><span>Authoritative connection parameters, OAuth declaration, and allowlist.</span></li>
+        <li><a href="../src/databricks/labs/community_connector/sources/crm_analytics/crm_analytics.py">Source implementation</a><span>Reader behavior and exact failure categories.</span></li>
+        <li><a href="../tools/community_connector/README.md">Community Connector CLI guide</a><span>Build/upload, custom tiles, connection setup, and pipeline modes.</span></li>
+        <li><a href="../src/databricks/labs/community_connector/sources/crm_analytics/docs/validation.md">Offline validation report</a><span>Historical test evidence and outstanding live gates.</span></li>
+        <li><a href="../src/databricks/labs/community_connector/sources/crm_analytics/docs/framework-integration.md">Framework integration boundary</a><span>Snapshot application, completion evidence, and separate archive concerns.</span></li>
+        <li><a href="../src/databricks/labs/community_connector/sources/crm_analytics/crm_analytics_api_doc.md">API research and unresolved questions</a><span>Source semantics, scalability, metadata, visibility, and retention.</span></li>
+        <li><a href="https://developer.salesforce.com/docs/atlas.en-us.bi_dev_guide_rest.meta/bi_dev_guide_rest/bi_rest_overview.htm">Salesforce CRM Analytics REST API</a><span>Official API reference; verify version support in your org.</span></li>
+        <li><a href="https://resources.docs.salesforce.com/latest/latest/en-us/sfdc/pdf/bi_dev_guide_saql.pdf">Salesforce SAQL guide</a><span>Official query-language reference.</span></li>
+        <li><a href="https://developer.salesforce.com/docs/platform/mobile-sdk/guide/eca-create.html">Salesforce app creation guidance</a><span>External Client App guidance; use security policies appropriate for this connector.</span></li>
+      </ul>
+      <h3>Escalate with reproducible, sanitized evidence</h3>
+      <p>For source permissions/OAuth, start with the Salesforce administrator. For workspace grants, wheels, runtime, or pipeline errors, involve the Databricks platform owner. Report connector defects through the <a href="https://github.com/laurentfabre/lakeflow-community-connectors/issues">contribution repository</a> using the source name, exact revision, redacted spec, runtime, error category, expected/observed behavior, and a synthetic reproduction where possible. Confirm the repository's current issue intake before sharing; never post customer data or credentials publicly.</p>
+      <p>This is a community contribution. Product support channels and agreements apply to the products they cover; they do not establish a separate support SLA for this connector.</p>
+    </section>
+    <footer>CRM Analytics community connector · Package 0.1.0 · Guide reviewed 29 October 2026.<br>Self-contained HTML: no external fonts, scripts, analytics, or network dependency for reading. Open from a local checkout or serve from your documentation host.</footer>
+  </main>
+  <div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
+  <script>
+    (() => {
+      const rows = Array.from(document.querySelectorAll('#feature-body tr'));
+      const search = document.getElementById('feature-search');
+      const count = document.getElementById('feature-count');
+      document.getElementById('feature-tools').hidden = false;
+      const filterFeatures = () => {
+        const query = search.value.trim().toLocaleLowerCase();
+        let visible = 0;
+        rows.forEach(row => {
+          row.hidden = !row.textContent.toLocaleLowerCase().includes(query);
+          if (!row.hidden) visible++;
+        });
+        count.textContent = `${visible} of ${rows.length} capabilities`;
+        document.getElementById('feature-empty').hidden = visible > 0;
+      };
+      search.addEventListener('input', filterFeatures);
+      filterFeatures();
+      document.querySelectorAll('.copy').forEach(button => {
+        button.hidden = false;
+        button.setAttribute('aria-label', `Copy ${button.parentElement.querySelector('span').textContent}`);
+        button.addEventListener('click', async () => {
+          const code = button.closest('.code-block').querySelector('code');
+          try {
+            if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('Clipboard unavailable');
+            await navigator.clipboard.writeText(code.textContent);
+            button.textContent = 'Copied';
+            document.getElementById('copy-status').textContent = 'Code copied to clipboard.';
+            setTimeout(() => { button.textContent = 'Copy'; }, 1800);
+          } catch (_) {
+            const selection = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(code);
+            selection.removeAllRanges();
+            selection.addRange(range);
+            document.getElementById('copy-status').textContent = 'Code selected. Use your browser’s Copy command.';
+          }
+        });
+      });
+      const printButton = document.getElementById('print-guide');
+      printButton.hidden = false;
+      printButton.addEventListener('click', () => window.print());
+      let previousDetails = null;
+      window.addEventListener('beforeprint', () => {
+        if (previousDetails !== null) return;
+        previousDetails = Array.from(document.querySelectorAll('details')).map(detail => [detail, detail.open]);
+        previousDetails.forEach(([detail]) => { detail.open = true; });
+        rows.forEach(row => { row.hidden = false; });
+        document.getElementById('feature-empty').hidden = true;
+      });
+      window.addEventListener('afterprint', () => {
+        if (previousDetails === null) return;
+        previousDetails.forEach(([detail, open]) => { detail.open = open; });
+        previousDetails = null;
+        filterFeatures();
+      });
+      if ('IntersectionObserver' in window) {
+        const links = Array.from(document.querySelectorAll('.sidebar nav a'));
+        const observer = new IntersectionObserver(entries => {
+          const entry = entries.filter(item => item.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+          if (!entry) return;
+          links.forEach(link => {
+            if (link.hash === `#${entry.target.id}`) link.setAttribute('aria-current', 'location');
+            else link.removeAttribute('aria-current');
+          });
+        }, {rootMargin: '0px 0px -65% 0px', threshold: 0});
+        document.querySelectorAll('main section[id]').forEach(section => observer.observe(section));
+      }
+    })();
+  </script>
+</body>
+</html>
