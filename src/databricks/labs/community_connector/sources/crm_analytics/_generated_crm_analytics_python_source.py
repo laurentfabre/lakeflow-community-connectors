@@ -1106,7 +1106,11 @@ def register_lakeflow_source(spark):
                 "databricks.connection",
                 "instance_url",
                 "access_token",
+                # UC connection metadata injected alongside the token at runtime.
                 "access_token_expiration",
+                "refresh_token_expiration",
+                "externaloptionsallowlist",
+                "sourcename",
                 "api_version",
                 "page_size",
                 "timeout_seconds",

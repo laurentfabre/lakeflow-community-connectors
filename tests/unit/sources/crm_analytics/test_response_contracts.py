@@ -60,16 +60,25 @@ def dataset_type_response(value):
     return transform
 
 
-@pytest.mark.parametrize("option_name", ["access_token_expiration", "ACCESS_TOKEN_EXPIRATION"])
-def test_connection_token_expiration_does_not_change_snapshot_identity(source, option_name):
+@pytest.mark.parametrize("option_case", ["lower", "upper"])
+def test_connection_metadata_does_not_change_snapshot_identity(source, option_case):
     baseline = source.pin_table(DATASET, OPTIONS)
-    options = {**OPTIONS, option_name: "2026-10-30T17:00:00Z"}
+    metadata = {
+        "access_token_expiration": "2026-10-30T17:00:00Z",
+        "refresh_token_expiration": "2026-11-30T17:00:00Z",
+        "externaloptionsallowlist": "source_primary_keys,auto_increment_column",
+        "sourcename": "crm_analytics",
+    }
+    options = {**OPTIONS, **{getattr(key, option_case)(): value for key, value in metadata.items()}}
     assert source.pin_table(DATASET, options) == baseline
     assert len(exhaust(source, options)) == 7
     evidence = source.get_read_evidence(DATASET, options)
     assert evidence["extracted_row_count"] == 7
     # Token rotation changes connection metadata, not the source data contract.
-    rotated = {**options, option_name: "2026-10-30T18:00:00Z"}
+    rotated = {
+        **OPTIONS,
+        **{getattr(key, option_case)(): value + "-changed" for key, value in metadata.items()},
+    }
     assert source.pin_table(DATASET, rotated) == baseline
     assert source.get_read_evidence(DATASET, rotated) == evidence
 

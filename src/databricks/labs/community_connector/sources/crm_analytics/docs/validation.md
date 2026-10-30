@@ -25,10 +25,11 @@ works. The query enum remains `datasetTypes=Default`. Other/malformed dataset
 types fail before query execution, and a type change during final revalidation
 still invalidates the snapshot.
 
-The connection-supplied `access_token_expiration` key is treated as transport
+The connection-supplied `access_token_expiration`, `refresh_token_expiration`,
+`externaloptionsallowlist`, and `sourcename` keys are treated as transport
 metadata. Lowercase and uppercase option keys support complete reads without
 changing the pinned descriptor, configuration fingerprint, or read evidence as
-the expiry changes. The 407-row framework batch-reader test includes this
+the connection metadata changes. The 407-row framework batch-reader test includes this
 metadata in both column naming modes. Token refresh remains the connection
 layer's responsibility; the reader does not interpret this expiry metadata.
 
