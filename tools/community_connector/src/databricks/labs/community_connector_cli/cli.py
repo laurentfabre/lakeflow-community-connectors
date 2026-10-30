@@ -22,13 +22,15 @@ import traceback
 import zipfile
 from pathlib import Path
 from typing import Optional, List, Set, Tuple
+from urllib.parse import urlencode
 
 import click
 import yaml
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.errors import BadRequest
 from databricks.sdk.service.catalog import VolumeType
 from databricks.sdk.service.pipelines import PipelineSpec, PipelinesEnvironment
-from databricks.sdk.service.workspace import ImportFormat, Language
+from databricks.sdk.service.workspace import ExportFormat, ImportFormat, Language
 
 from databricks.labs.community_connector_cli.config import build_config, load_default_config
 from databricks.labs.community_connector_cli.oauth_flow import (
@@ -72,6 +74,7 @@ CONNECTION_TYPE = "COMMUNITY"
 # Workspace location and file extension for saved community connector manifests.
 COMMUNITY_CONNECTORS_DIR_NAME = ".community-connectors"
 COMMUNITY_CONNECTOR_EXTENSION = ".connector.json"
+COMMUNITY_CONNECTOR_SETUP_EXTENSION = ".setup.json"
 
 # Filename-safe display names. The display name becomes the workspace filename
 # verbatim, so this allowlist blocks path traversal and malformed writes.
@@ -1726,13 +1729,15 @@ def _build_community_connector_manifest(
 
 
 def _write_community_connector_manifest(
-    workspace_client, dir_path: str, file_path: str, manifest: dict, overwrite: bool
+    workspace_client, dir_path: str, file_path: str, manifest: dict, overwrite: bool,
+    *, import_format: ImportFormat = ImportFormat.AUTO,
 ) -> None:
-    """Write the manifest to the workspace as a ``.connector.json`` file.
+    """Write a connector manifest to the workspace.
 
     Creates the ``.community-connectors`` directory (idempotent) and imports the
     file with ``format=AUTO`` so the server infers NodeType.CommunityConnector
     from the ``.connector.json`` extension — the same call the webapp makes.
+    Use RAW with a ``.setup.json`` path for an ordinary compatibility file.
     """
     try:
         workspace_client.workspace.mkdirs(dir_path)
@@ -1748,7 +1753,7 @@ def _write_community_connector_manifest(
         workspace_client.workspace.import_(
             path=file_path,
             content=content_base64,
-            format=ImportFormat.AUTO,
+            format=import_format,
             overwrite=overwrite,
         )
     except Exception as e:
@@ -1758,6 +1763,70 @@ def _write_community_connector_manifest(
                 "Re-run with --overwrite to replace it."
             )
         raise click.ClickException(f"Failed to write {file_path}: {e}")
+
+
+def _verify_community_connector_manifest(
+    workspace_client, file_path: str, manifest: dict
+) -> None:
+    """Read back the manifest with the same export format used by Add Data."""
+    response = workspace_client.workspace.export(path=file_path, format=ExportFormat.SOURCE)
+    try:
+        saved_manifest = json.loads(base64.b64decode(response.content, validate=True))
+    except (TypeError, ValueError) as e:
+        raise click.ClickException(f"Invalid manifest read back from {file_path}") from e
+    if saved_manifest != manifest:
+        raise click.ClickException(f"Manifest readback did not match {file_path}")
+
+
+def _publish_community_connector_manifest(
+    workspace_client, dir_path: str, file_path: str, manifest: dict, overwrite: bool
+) -> str:
+    """Save a connector and return a manifest path that Add Data can read.
+
+    Some workspaces recognize COMMUNITY_CONNECTOR on import while their export
+    API cannot read that type yet. Preserve the connector asset for discovery
+    when available and publish an ordinary JSON copy for the setup deep link.
+    Do not fall back on authorization, network, or unrelated API failures.
+    """
+    _write_community_connector_manifest(
+        workspace_client, dir_path, file_path, manifest, overwrite
+    )
+    try:
+        _verify_community_connector_manifest(workspace_client, file_path, manifest)
+        return file_path
+    except BadRequest as e:
+        if "No access to read file" not in str(e):
+            raise click.ClickException(f"Setup manifest readback failed for {file_path}: {e}") from e
+    except Exception as e:
+        raise click.ClickException(f"Setup manifest readback failed for {file_path}: {e}") from e
+
+    setup_path = (
+        file_path[:-len(COMMUNITY_CONNECTOR_EXTENSION)] + COMMUNITY_CONNECTOR_SETUP_EXTENSION
+    )
+    click.echo(
+        "  This workspace cannot export the connector asset for setup. "
+        "Saving an ordinary JSON setup manifest."
+    )
+    _write_community_connector_manifest(
+        workspace_client, dir_path, setup_path, manifest, overwrite,
+        import_format=ImportFormat.RAW,
+    )
+    try:
+        _verify_community_connector_manifest(workspace_client, setup_path, manifest)
+    except Exception as e:
+        raise click.ClickException(f"Setup manifest readback failed for {setup_path}: {e}") from e
+    return setup_path
+
+
+def _community_connector_setup_url(workspace_host: str, manifest_path: str) -> str:
+    """Use Add Data's connector setup route, rather than its file-editor route."""
+    query = urlencode({
+        "ingestion-addDataPipeline-sourceType": "COMMUNITY",
+        "ingestion-addDataPipeline-communityConnectorPath": manifest_path,
+        "ingestion-addDataPipeline-open": "true",
+        "ingestion-addDataPipeline-step": "connection",
+    })
+    return f"{workspace_host.rstrip('/')}/ingestion/add?{query}"
 
 
 # ---- end publish helpers -----------------------------------------------------
@@ -2952,7 +3021,10 @@ def publish(
     Writes a workspace file at
     ``/Users/<you>/.community-connectors/<display_name>.connector.json``. The
     server infers the CommunityConnector asset type from the `.connector.json`
-    extension, and the saved connector appears as a "Custom" tile in Add Data.
+    extension. Workspaces with saved-connector discovery enabled show a Custom
+    tile in Add Data. A verified manifest and setup URL are also provided; if the
+    workspace cannot export the special asset, an ordinary .setup.json copy is
+    saved for that URL.
 
     The manifest's ``connectionSpec`` is read from the connector's
     ``connector_spec.yaml``. By default the framework + connector wheels are
@@ -3002,17 +3074,20 @@ def publish(
     file_path = f"{dir_path}/{resolved_display_name}{COMMUNITY_CONNECTOR_EXTENSION}"
 
     click.echo(f"\nWriting connector to: {file_path}")
-    _write_community_connector_manifest(
+    setup_path = _publish_community_connector_manifest(
         workspace_client, dir_path, file_path, manifest, overwrite
     )
     click.echo("  ✓ Published!")
     click.echo(f"\n{'=' * 60}")
     click.echo(f"Connector: {resolved_display_name}")
     click.echo(f"Path:      {file_path}")
+    setup_url = _community_connector_setup_url(workspace_client.config.host, setup_path)
+    click.echo(f"Setup:     {setup_url}")
     click.echo(f"{'=' * 60}")
     click.echo(
-        "\nThe connector now appears as a 'Custom' tile in Add Data "
-        "(under Community connectors)."
+        "\nOpen the Setup URL to configure the connector. Named Custom tiles in "
+        "Add Data require workspace support for saved-connector discovery. "
+        "Publication does not validate connection permissions, OAuth, or ingestion."
     )
 
 
@@ -3068,7 +3143,8 @@ def unpublish(
     SOURCE_NAME is the name of the connector source (e.g., 'github', 'stripe').
 
     Deletes the ``.connector.json`` file that ``publish`` wrote at
-    ``/Users/<you>/.community-connectors/<display_name>.connector.json``, so the
+    ``/Users/<you>/.community-connectors/<display_name>.connector.json`` and any
+    matching ``.setup.json`` compatibility file, so the
     connector no longer appears as a "Custom" tile in Add Data. The display name
     is resolved the same way as ``publish``; errors if no matching connector is
     found.
@@ -3090,22 +3166,28 @@ def unpublish(
     dir_path = f"/Users/{current_user.user_name}/{COMMUNITY_CONNECTORS_DIR_NAME}"
     file_path = f"{dir_path}/{resolved_display_name}{COMMUNITY_CONNECTOR_EXTENSION}"
 
-    if not _workspace_object_exists(workspace_client, file_path):
+    setup_path = f"{dir_path}/{resolved_display_name}{COMMUNITY_CONNECTOR_SETUP_EXTENSION}"
+    paths = [
+        path for path in (file_path, setup_path)
+        if _workspace_object_exists(workspace_client, path)
+    ]
+    if not paths:
         raise click.ClickException(
             f"No published connector found at {file_path}. "
             "Check the display name (use --display-name if it differs from the source name)."
         )
 
     if not assume_yes:
-        click.confirm(f"Delete published connector at {file_path}?", abort=True)
+        click.confirm(f"Delete published connector manifests: {', '.join(paths)}?", abort=True)
 
-    click.echo(f"Removing connector: {file_path}")
-    try:
-        workspace_client.workspace.delete(path=file_path)
-    except Exception as e:
-        if debug:
-            click.echo(f"\n[DEBUG] Full exception: {traceback.format_exc()}", err=True)
-        raise click.ClickException(f"Failed to delete {file_path}: {e}")
+    for path in paths:
+        click.echo(f"Removing connector: {path}")
+        try:
+            workspace_client.workspace.delete(path=path)
+        except Exception as e:
+            if debug:
+                click.echo(f"\n[DEBUG] Full exception: {traceback.format_exc()}", err=True)
+            raise click.ClickException(f"Failed to delete {path}: {e}")
     click.echo("  ✓ Unpublished!")
 
 

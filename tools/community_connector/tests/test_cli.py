@@ -3484,6 +3484,15 @@ class TestWriteCommunityConnectorManifest:
 class TestPublishCommand:
     """Tests for the `publish` command."""
 
+    @staticmethod
+    def _workspace():
+        mock_ws = MagicMock()
+        mock_ws.config.host = "https://test.databricks.com"
+        mock_ws.workspace.export.side_effect = lambda **_: MagicMock(
+            content=mock_ws.workspace.import_.call_args.kwargs["content"]
+        )
+        return mock_ws
+
     @patch("databricks.labs.community_connector_cli.cli.WorkspaceClient")
     @patch("databricks.labs.community_connector_cli.cli._build_and_upload_managed_wheels")
     @patch("databricks.labs.community_connector_cli.cli._resolve_managed_dest_dir")
@@ -3498,7 +3507,7 @@ class TestPublishCommand:
             "/Volumes/main/default/community_connector/packages/fw.whl",
             "/Volumes/main/default/community_connector/packages/conn.whl",
         ]
-        mock_ws = MagicMock()
+        mock_ws = self._workspace()
         mock_ws_cls.return_value = mock_ws
         mock_ws.current_user.me.return_value.user_name = "me@example.com"
 
@@ -3529,7 +3538,7 @@ class TestPublishCommand:
         mock_load_spec.return_value = {"connection": {}}
         mock_dest_dir.return_value = "/Volumes/main/default/community_connector/packages"
         mock_build_wheels.return_value = []
-        mock_ws = MagicMock()
+        mock_ws = self._workspace()
         mock_ws_cls.return_value = mock_ws
         mock_ws.current_user.me.return_value.user_name = "me@example.com"
 
@@ -3556,7 +3565,7 @@ class TestPublishCommand:
         mock_build_wheels.return_value = [
             "/Volumes/main/default/community_connector/packages/conn.whl"
         ]
-        mock_ws = MagicMock()
+        mock_ws = self._workspace()
         mock_ws_cls.return_value = mock_ws
         mock_ws.current_user.me.return_value.user_name = "me@example.com"
 
@@ -3588,7 +3597,7 @@ class TestPublishCommand:
         )
         wheel = tmp_path / "conn.whl"
         wheel.write_text("x")
-        mock_ws = MagicMock()
+        mock_ws = self._workspace()
         mock_ws_cls.return_value = mock_ws
         mock_ws.current_user.me.return_value.user_name = "me@example.com"
 
@@ -3612,7 +3621,7 @@ class TestPublishCommand:
         mock_load_spec.return_value = None
         mock_dest_dir.return_value = "/Volumes/main/default/community_connector/packages"
         mock_build_wheels.return_value = []
-        mock_ws = MagicMock()
+        mock_ws = self._workspace()
         mock_ws_cls.return_value = mock_ws
         mock_ws.current_user.me.return_value.user_name = "me@example.com"
 
@@ -3636,7 +3645,7 @@ class TestPublishCommand:
         mock_load_spec.return_value = {"connection": {}}
         mock_dest_dir.return_value = "/Volumes/main/default/community_connector/packages"
         mock_build_wheels.return_value = []
-        mock_ws = MagicMock()
+        mock_ws = self._workspace()
         mock_ws_cls.return_value = mock_ws
         mock_ws.current_user.me.return_value.user_name = "me@example.com"
 
@@ -3654,6 +3663,11 @@ class TestUnpublishCommand:
         """A WorkspaceClient mock whose get_status succeeds (object exists)."""
         mock_ws = MagicMock()
         mock_ws.current_user.me.return_value.user_name = user
+        def get_status(path):
+            if path.endswith(".setup.json"):
+                raise Exception("RESOURCE_DOES_NOT_EXIST")
+            return MagicMock()
+        mock_ws.workspace.get_status.side_effect = get_status
         return mock_ws
 
     @staticmethod

@@ -312,8 +312,17 @@ in order.
 Publish a connector to your workspace as a `.connector.json` asset. The file is
 written to `/Users/<you>/.community-connectors/<display_name>.connector.json`;
 the workspace server infers the `CommunityConnector` asset type from the
-`.connector.json` extension, and the saved connector then appears as a **Custom**
-tile in the "Add Data" page (under Community connectors).
+`.connector.json` extension. Workspaces with saved-connector discovery enabled
+show a **Custom** tile in Add Data (under Community connectors).
+
+The command reads the manifest back using the same export format as Add Data
+and prints a **Setup** URL. Use that URL to open the connector configuration;
+opening the asset as a workspace text file is not supported in every workspace.
+If the workspace accepts the special asset but cannot export it for setup, the
+command also saves an ordinary `<display_name>.setup.json` manifest and verifies
+that copy before printing its setup link. This compatibility path does not
+enable named tile discovery. Other readback errors fail publication rather than
+reporting an unverified setup link.
 
 The manifest's `connectionSpec` is read from the connector's
 `connector_spec.yaml` (resolved the same way as `create_connection --spec`: local
@@ -349,7 +358,8 @@ community-connector publish github -d "My GitHub" --overwrite
 Remove a previously published connector from your workspace — the inverse of
 `publish`. Deletes the `.connector.json` file at
 `/Users/<you>/.community-connectors/<display_name>.connector.json`, so the
-connector no longer appears as a **Custom** tile in Add Data. The display name is
+connector no longer appears as a **Custom** tile in Add Data. Any matching
+`.setup.json` compatibility manifest is also removed. The display name is
 resolved the same way as `publish`; the command errors if no matching connector
 is found, and prompts for confirmation unless `--yes` is passed.
 
