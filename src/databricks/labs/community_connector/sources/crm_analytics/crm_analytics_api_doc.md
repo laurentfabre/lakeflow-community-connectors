@@ -7,6 +7,10 @@ last updated September 11, 2026. No credentials or live organization endpoints
 were used. API-version availability must be checked on the target organization
 in Phase 2; the edition of a public guide is not that check.
 
+The research record below remains historical. A subsequent targeted Databricks
+ingestion smoke test is described in [validation](docs/validation.md); it does
+not close the remaining production gates.
+
 ## Implementation decision and scope
 
 Implement **full snapshots of CRM Analytics dataset rows**, discovered dynamically
@@ -261,6 +265,15 @@ numbering, retaining identical rows and null/duplicate business keys.
 in the physical projection. Generated fields are not SAQL source columns and
 must not appear in `selected_columns`.
 
+In generated mode the projection adds `(case when 'Field' is null then 1 else
+0 end)` under internal, collision-safe aliases. A missing physical JSON property
+is restored as null only when its numeric flag is 1. A flag of 0 requires a
+present non-null value. Missing/invalid flags and contradictions fail; extra
+physical properties still fail. Internal aliases never enter target rows or
+schemas. This uses the documented searched `case` and `is null` operators
+[R2, pp. 35–37]. A targeted live smoke corroborated sparse null recovery for a
+two-column projection; wider field/type coverage still needs validation.
+
 Numbers restart per version. The version component prevents incorrect entity
 matches when numbers repeat across versions; this identity does not follow a
 business entity through changes. SCD Type 1 replaces the previous version's raw
@@ -356,7 +369,7 @@ Documented response structure:
 | `action` | Query action, usually `query`. |
 | `responseId` | Diagnostic request identifier. |
 | `results.metadata` | Query lineage/projection metadata, not a replacement for pinned dataset XMD. |
-| `results.records` | Array of row objects; validate its presence, type, exact projected keys, and value types. |
+| `results.records` | Array of row objects; validate its presence, type, projected keys, and value types. Generated mode validates internal null flags before reconstructing confirmed omitted null properties and enforcing exact physical keys. |
 | `query` | Original query text. |
 | `responseTime` | Query timing. |
 | `warnings` | Optional warning/error information. Fail closed on warnings until a specific harmless code is justified. |
@@ -536,7 +549,9 @@ technical capability claim.
 - All source API template sections are present.
 - Read endpoints, paging parameters, response metadata inventory, dynamic row
   schema derivation, key policy, and snapshot strategy are documented.
-- No credentialed source requests or Databricks deployment were made.
+- No credentialed source requests or Databricks deployment were made during the
+  original research stage; subsequent targeted runtime evidence is recorded
+  separately in [validation](docs/validation.md).
 - Cross-source API semantics are corroborated where possible; exact XMD/schema
   and zero-row response behavior still require live evidence, not fabricated
   second sources.

@@ -139,12 +139,25 @@ def query(prepared, _spec, corpus):
             # Aliases come from the request; do not derive them from source
             # names or import the production connector's naming policy.
             projection_text = project.group(1)
-            projection = re.findall(
-                r"'([^'\\\x00-\x1f]+)' as '([A-Za-z_][A-Za-z0-9_]*)'", projection_text
+            projection_matches = list(
+                re.finditer(
+                    r"(?:'(?P<source>[^'\\\x00-\x1f]+)'|"
+                    r"\(case when '(?P<null_source>[^'\\\x00-\x1f]+)' is null then 1 else 0 end\))"
+                    r" as '(?P<alias>[A-Za-z_][A-Za-z0-9_]*)'",
+                    projection_text,
+                )
             )
-            if ", ".join(f"'{a}' as '{b}'" for a, b in projection) != projection_text:
+            if ", ".join(match.group(0) for match in projection_matches) != projection_text:
                 raise ValueError("unsupported projection")
-            aliases = [b for _, b in projection]
+            projection = [
+                (
+                    match.group("source") or match.group("null_source"),
+                    match.group("alias"),
+                    match.group("null_source") is not None,
+                )
+                for match in projection_matches
+            ]
+            aliases = [alias for _, alias, _ in projection]
             if not projection or len({alias.lower() for alias in aliases}) != len(aliases):
                 raise ValueError("duplicate/empty projection")
             sort_text = order.group(1)
@@ -156,7 +169,13 @@ def query(prepared, _spec, corpus):
             size, start = int(limit.group(1)), int(offset.group(1))
             if not 1 <= size <= 10000:
                 raise ValueError("unsupported page size")
-            projected = [{alias: row[source] for source, alias in projection} for row in rows]
+            projected = [
+                {
+                    alias: int(row[source] is None) if is_null else row[source]
+                    for source, alias, is_null in projection
+                }
+                for row in rows
+            ]
             # Null/malformed key values remain visible to connector validation.
             projected.sort(key=lambda r: tuple((r[k] is not None, str(r[k])) for k in sort_keys))
             records = projected[start : start + size]

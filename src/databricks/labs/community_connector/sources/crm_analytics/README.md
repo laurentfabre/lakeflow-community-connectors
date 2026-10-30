@@ -10,10 +10,14 @@ from a repository checkout. It includes a feature matrix, operating guidance,
 and an evaluation checklist. The HTML guide is a repository document, not a
 connector wheel asset.
 
-Credentialed Salesforce reads, the OAuth lifecycle, and actual Databricks
-Spark/Delta execution have not yet been validated for this connector. Complete
-the repository's `/validate-connector crm_analytics` workflow before production
-use. Offline checks do not establish production readiness.
+Two normal Databricks pipeline updates completed in a targeted live smoke test
+using an existing UC OAuth connection and a two-column raw projection. Duplicate
+and null business keys were retained; generated keys were unique/non-null, and
+an exact repeat-output comparison found no changes. This does not establish the
+OAuth creation/renewal lifecycle, wider type/projection coverage, version-change
+behavior or production readiness. Complete the repository's
+`/validate-connector crm_analytics` workflow for the intended workload; see the
+[validation record](docs/validation.md).
 
 ## Prerequisites
 
@@ -242,6 +246,13 @@ or duplicate business keys are preserved. `source_primary_keys` may be omitted;
 if retained, its names must still be physical projected fields. Omit the common
 `primary_keys` override so the framework uses the generated pair. Keep generated
 columns out of `selected_columns`: they are added locally after source retrieval.
+
+Raw mode also projects an internal numeric null flag for each physical field.
+If a response omits a property, the reader restores it as `None` only when its
+flag confirms a null. Missing, malformed or contradictory flags, unexpected
+fields, and omitted non-null values still fail. Flags are collision-safe query
+aliases and are removed before yielding rows; they do not become target columns.
+Strict business-key mode retains its existing exact-property validation.
 
 Numbers restart at 1 for each dataset version. The version component prevents
 number reuse from linking unrelated rows across versions. The reader orders

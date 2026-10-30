@@ -835,13 +835,67 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
             )
         budget.remaining()
 
+    @staticmethod
+    def _source_query(load: str, descriptor: dict, options: dict) -> tuple[str, dict[str, str]]:
+        mapping = descriptor["column_mapping"]
+        projection_fields = [f"'{source}' as '{target}'" for source, target in mapping.items()]
+        null_flags = {}
+        if options.get("auto_increment_column"):
+            # Some SAQL responses omit null-valued properties. An independent,
+            # non-null CASE flag confirms nulls without accepting missing data.
+            used_names = {column.lower() for column in mapping.values()}
+            used_names.update(
+                (_GENERATED_VERSION_COLUMN.lower(), options["auto_increment_column"].lower())
+            )
+            for index, (source, target) in enumerate(mapping.items()):
+                flag = f"_crm_analytics_null_{index}"
+                while flag.lower() in used_names:
+                    flag += "_"
+                used_names.add(flag.lower())
+                null_flags[target] = flag
+                projection_fields.append(
+                    f"(case when '{source}' is null then 1 else 0 end) as '{flag}'"
+                )
+        projection = ", ".join(projection_fields)
+        # Number after retrieval, ordering by every physical value in raw mode.
+        # Equal full projections retain every occurrence.
+        order_columns = (
+            list(mapping.values())
+            if options.get("auto_increment_column")
+            else descriptor["primary_keys"]
+        )
+        order = ", ".join(f"'{column}' asc" for column in order_columns)
+        return load + f" q = foreach q generate {projection}; q = order q by ({order});", null_flags
+
     def _convert_row(
         self, row: dict, context: dict, row_number: int | None = None
     ) -> tuple[dict, tuple]:
         descriptor, options = context["descriptor"], context["options"]
         mapping = descriptor["column_mapping"]
+        if context.get("null_flags"):
+            row = dict(row)
+            for target, flag in context["null_flags"].items():
+                marker = row.pop(flag, None)
+                if (
+                    isinstance(marker, bool)
+                    or not isinstance(marker, (int, Decimal))
+                    or marker not in (0, 1)
+                ):
+                    raise CrmAnalyticsError("Missing or invalid Salesforce null flag")
+                if marker == 1:
+                    if row.get(target) is not None:
+                        raise CrmAnalyticsError("Salesforce null flag contradicts projected value")
+                    row[target] = None
+                elif target in row and row[target] is None:
+                    raise CrmAnalyticsError("Salesforce null flag contradicts projected value")
         if set(row) != set(mapping.values()):
-            raise CrmAnalyticsError("Snapshot row differs from the exact pinned projection")
+            missing = json.dumps(sorted(set(mapping.values()) - set(row)), ensure_ascii=True)
+            unexpected = json.dumps(sorted(set(row) - set(mapping.values())), ensure_ascii=True)
+            raise CrmAnalyticsError(
+                "Snapshot row differs from the exact pinned projection: "
+                f"row_number={row_number}; missing={missing[:512]}; "
+                f"unexpected={unexpected[:512]}"
+            )
         converted = {
             target: self._value(row[target], context["kinds"][source], options)
             for source, target in mapping.items()
@@ -884,18 +938,8 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                 "Snapshot requires more than max_query_requests; increase explicitly"
             )
         load = f'q = load "{name}/{version_id}";'
-        mapping = descriptor["column_mapping"]
-        projection = ", ".join(f"'{source}' as '{target}'" for source, target in mapping.items())
-        # A generated number is assigned after retrieval. Order by every physical
-        # projected value so rows with duplicate business keys remain repeatable.
-        # Equal full projections are indistinguishable; retain every occurrence.
-        order_columns = (
-            list(mapping.values())
-            if options.get("auto_increment_column")
-            else descriptor["primary_keys"]
-        )
-        order = ", ".join(f"'{column}' asc" for column in order_columns)
-        query = load + f" q = foreach q generate {projection}; q = order q by ({order});"
+        query, null_flags = self._source_query(load, descriptor, options)
+        context = {**context, "null_flags": null_flags}
 
         def check_read():
             if self._read_epochs[key] != epoch:

@@ -39,6 +39,91 @@ def raw_values(rows):
     return Counter((row["Account__Id"], row["Region"], str(row["Amount"])) for row in rows)
 
 
+def omit_null_properties(prepared, response):
+    if prepared.method != "POST" or "count()" in query_text(prepared):
+        return response
+    body = json.loads(response.text)
+    body["results"]["records"] = [
+        {key: value for key, value in row.items() if value is not None}
+        for row in body["results"]["records"]
+    ]
+    return response_body(response, body)
+
+
+def test_sparse_null_rows_are_recovered_only_with_salesforce_confirmation(source, simulator, wire):
+    rows = replace_rows(simulator, 7)
+    rows[0]["Account.Id"] = None
+    rows[0]["Region"] = None
+    rows[1]["Amount"] = None
+    rows[2]["Region"] = ""  # Empty strings remain distinct from nulls.
+    rows[-1] = copy.deepcopy(rows[0])
+    expected = Counter((row["Account.Id"], row["Region"], str(row["Amount"])) for row in rows)
+    wire[1]["transform"] = omit_null_properties
+    result = exhaust(source, RAW)
+    assert raw_values(result) == expected
+    assert [row[ROW_ID] for row in result] == list(range(1, 8))
+    assert all(
+        set(row) == {"Account__Id", "Amount", "Region", ROW_ID, VERSION_COLUMN} for row in result
+    )
+    assert source.get_read_evidence(DATASET, RAW)["extracted_row_count"] == 7
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing", "bool", "string", "invalid", "null", "false_null", "false_value"]
+)
+def test_raw_reads_reject_absent_invalid_or_inconsistent_null_flags(
+    source, simulator, wire, mutation
+):
+    simulator.corpus.tables[ROWS][0]["Account.Id"] = None
+
+    def transform(prepared, response):
+        if prepared.method != "POST" or "count()" in query_text(prepared):
+            return response
+        body = json.loads(response.text)
+        records = body["results"]["records"]
+        if records:
+            row = records[0]
+            flag = "_crm_analytics_null_0"
+            assert row[flag] == 1
+            if mutation == "missing":
+                row.pop(flag)
+            elif mutation in {"bool", "string", "invalid", "null"}:
+                row[flag] = {"bool": True, "string": "1", "invalid": 2, "null": None}[mutation]
+            elif mutation == "false_null":
+                row[flag] = 0
+            else:
+                row["Account__Id"] = "source-value-must-not-appear-in-diagnostics"
+        return response_body(response, body)
+
+    wire[1]["transform"] = transform
+    with pytest.raises(RuntimeError, match="Salesforce null flag") as error:
+        exhaust(source, RAW)
+    assert "source-value-must-not-appear-in-diagnostics" not in str(error.value)
+    with pytest.raises(RuntimeError, match="not completed"):
+        source.get_read_evidence(DATASET, RAW)
+
+
+def test_null_flag_aliases_do_not_collide_with_physical_or_generated_columns(
+    source, simulator, wire
+):
+    name = "_CRM_ANALYTICS_NULL_0"
+    simulator.corpus.tables["versions"][0]["xmdMain"]["dimensions"].append({"field": name})
+    for row in simulator.corpus.tables[ROWS]:
+        row[name] = "physical-column-value"
+    simulator.corpus.tables[ROWS][0]["Account.Id"] = None
+    wire[1]["transform"] = omit_null_properties
+    options = {
+        **RAW,
+        "selected_columns": RAW["selected_columns"] + [name],
+        "auto_increment_column": "_crm_analytics_null_1",
+    }
+    result = exhaust(source, options)
+    assert len(result) == 7
+    assert all(row[name] == "physical-column-value" for row in result)
+    assert [row["_crm_analytics_null_1"] for row in result] == list(range(1, 8))
+    assert source.get_read_evidence(DATASET, options)["extracted_row_count"] == 7
+
+
 @pytest.mark.parametrize("with_source_keys", [False, True])
 def test_raw_ingestion_preserves_duplicate_and_null_business_keys(
     source, simulator, wire, with_source_keys
@@ -155,11 +240,12 @@ def test_primary_key_override_must_match_generated_metadata(source):
         source.pin_table(DATASET, {**RAW, "primary_keys": ["Account__Id", "Region"]})
 
 
-def test_generated_schema_and_framework_reader_on_separate_instances(source, simulator):
+def test_generated_schema_and_framework_reader_on_separate_instances(source, simulator, wire):
     rows = replace_rows(simulator, 407)
     for index, row in enumerate(rows):
         row["Account.Id"] = None if index % 7 == 0 else "duplicate-account"
         row["Region"] = "same-region"
+    wire[1]["transform"] = omit_null_properties
     options = {**CONFIG, **RAW, "tableName": DATASET, "version_id": VERSION}
     schema_source = type(source)({**CONFIG, "page_size": "101"})
     reader_source = type(source)({**CONFIG, "page_size": "101"})

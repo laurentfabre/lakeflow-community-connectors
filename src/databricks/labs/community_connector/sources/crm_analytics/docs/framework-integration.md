@@ -1,6 +1,7 @@
 # CRM Analytics framework integration
 
-Status: source implementation and offline contract tests; updated 2026-10-30.
+Status: source implementation, offline contracts and a targeted same-version
+live pipeline smoke test; updated 2026-10-30. See [validation](validation.md).
 Framework baseline: `ddc153b9741b686759ad85f25d2d45ca8a6ac24b`.
 
 ## Connector responsibility
@@ -38,6 +39,12 @@ from 1 through N across every page. All physical projected fields participate in
 the source ordering; identical projected rows retain every occurrence. Business
 keys can be duplicate or null, and `source_primary_keys` may be omitted. The
 standard snapshot pipeline consumes this metadata without a new framework mode.
+
+Raw reads include internal numeric CASE null flags in SAQL. An omitted physical
+property becomes `None` only after its flag confirms a null. Missing/invalid
+flags, contradictory values, extra fields and omitted non-null properties fail.
+Flags do not enter the physical column mapping, target schema or yielded rows.
+Strict business-key mode keeps exact-property validation without these flags.
 
 Use a new raw target or an explicit key/schema/checkpoint migration when
 enabling, disabling, or renaming the generated column. Omit the shared

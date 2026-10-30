@@ -20,6 +20,7 @@ from tests.unit.sources.crm_analytics.test_crm_analytics_lakeflow_connect import
     DATASET,
     OPTIONS,
     exhaust,
+    query_text,
     response_body,
     simulator,
     wire,
@@ -81,6 +82,44 @@ def test_connection_metadata_does_not_change_snapshot_identity(source, option_ca
     }
     assert source.pin_table(DATASET, rotated) == baseline
     assert source.get_read_evidence(DATASET, rotated) == evidence
+
+
+@pytest.mark.parametrize("generated", [False, True])
+@pytest.mark.parametrize("mutation", ["missing", "extra", "both", "long_names"])
+def test_projection_errors_identify_columns_without_row_values(source, wire, generated, mutation):
+    secret_value = "source-row-value-must-never-appear-in-logs"
+
+    def transform(prepared, response):
+        if prepared.method != "POST" or "count()" in query_text(prepared):
+            return response
+        body = json.loads(response.text)
+        rows = body["results"]["records"]
+        if rows:
+            if mutation in ("missing", "both"):
+                rows[0].pop("Amount")
+            if mutation in ("extra", "both"):
+                rows[0]["unexpected\nfield"] = secret_value
+            if mutation == "long_names":
+                rows[0].update(
+                    {f"column-{index}-" + "x" * 1000: secret_value for index in range(20)}
+                )
+        return response_body(response, body)
+
+    wire[1]["transform"] = transform
+    options = {**OPTIONS, **({"auto_increment_column": "_ingestion_row_id"} if generated else {})}
+    with pytest.raises(RuntimeError, match="exact pinned projection") as error:
+        exhaust(source, options)
+    message = str(error.value)
+    assert "row_number=1" in message
+    assert "missing=" in message and "unexpected=" in message
+    if mutation in ("missing", "both"):
+        assert 'missing=["Amount"]' in message
+    if mutation in ("extra", "both"):
+        assert 'unexpected=["unexpected\\nfield"]' in message
+    assert secret_value not in message and CONFIG["access_token"] not in message
+    assert "\n" not in message and len(message) < 1200
+    with pytest.raises(RuntimeError, match="not completed"):
+        source.get_read_evidence(DATASET, options)
 
 
 @pytest.mark.parametrize("dataset_type", ["default", "Default"])

@@ -1,16 +1,55 @@
 # CRM Analytics validation status
 
-Date: 2026-10-02. **Phase 1, offline only; not production certification.**
+Updated: 2026-10-30. **Offline contracts plus targeted runtime smoke;
+not production certification.**
 
 Framework baseline: `ddc153b9741b686759ad85f25d2d45ca8a6ac24b`.
 Local environment: Python 3.12.13, PySpark 4.2.0, pytest 8.4.2.
-No Java runtime, Salesforce organization, or Databricks workspace was used.
+The original offline baseline used no Java runtime, Salesforce organization or
+Databricks workspace. The separate live smoke below has narrower, stated scope.
+
+## Targeted live pipeline smoke — 2026-10-30
+
+The deployed merged source completed two normal Databricks ingestion updates
+using an existing UC OAuth connection, a two-column string/date-string projection,
+generated version/row keys and an SCD Type 1 raw destination. Neither update
+used a full refresh. Both completed without error/warning events in their
+captured logs.
+
+Read-only SQL checks verified the complete target count, unique/non-null
+generated keys, 1..N numbering, retained duplicate business keys and retained
+null business keys. A bidirectional `EXCEPT ALL` against the first completed
+Delta snapshot found zero added or removed rows after the second update,
+including all physical values and generated keys. The source version was
+unchanged, and the preexisting business-key destination remained present.
+
+This corroborates sparse null recovery and repeat stability for that projection.
+It does not validate OAuth creation/refresh, other field types, wide projections,
+version transitions, all source/target value fidelity, failure atomicity,
+permission-loss handling or the broader production acceptance gates below.
 
 ## Verified locally
 
+### Sparse response diagnostics and null confirmation — 2026-10-30
+
+The combined source and registry suites pass **432 tests with 2 expected skips**:
+423 source tests and 9 registry tests. Sixteen added regression cases verify
+bounded, escaped projection errors naming missing/unexpected fields and a row
+number, without field values or credentials. Eighteen further cases verify raw
+reads that restore omitted null properties only after numeric SAQL CASE flags
+confirm them. Both packaged and merged deployment readers are exercised.
+
+The null-response tests preserve identical rows, null dimensions and measures,
+and empty strings; reject missing, malformed and contradictory flags; avoid
+case-insensitive collisions with physical/generated names; and keep flags out
+of target rows. The existing 407-row framework-reader regression now uses sparse
+null responses. Omitted non-null fields and strict-mode malformed rows remain
+failures. Query budgets/counts, metadata revalidation, and target identity remain
+covered. These synthetic results are distinct from the targeted live smoke above.
+
 ### Customer metadata follow-up — 2026-10-30
 
-The current synthetic source suite passes **389 tests with 2 expected skips**;
+The earlier synthetic source suite passed **389 tests with 2 expected skips**;
 the separate registry suite passes **9 tests**. The combined command is:
 
 ```bash
