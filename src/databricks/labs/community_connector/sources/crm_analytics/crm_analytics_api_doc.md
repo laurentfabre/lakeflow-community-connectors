@@ -239,7 +239,7 @@ The researched APIs do not provide a guaranteed unique primary key for an
 arbitrary dataset. Dataset IDs identify datasets, not their rows;
 `recordIdField` is an action-link setting, not a uniqueness constraint.
 
-Require configured **stable, unique, non-null composite keys** for each dataset,
+By default, require configured **stable, unique, non-null composite keys** for each dataset,
 for example `source_primary_keys=["Account.Id", "FiscalYear"]`. Use source field names
 and validate membership in the pinned schema. Initially prefer scalar dimension
 keys. Aggregate datasets need keys at their aggregate grain, not an assumed
@@ -251,6 +251,29 @@ Keys also give a total order for offset pagination. Validate uniqueness while
 extracting, retain a global key set or use bounded/disk-backed validation, and
 fail visibly when local validation limits are exceeded. Do not stop reading at
 a memory/row cap and report success.
+
+**Optional raw-row identity (connector policy, not a Salesforce feature):**
+`auto_increment_column="_ingestion_row_id"` adds a local BIGINT number 1..N and
+the STRING `_crm_analytics_version_id`. Their pair is returned as the destination
+primary key. The source is ordered by all projected physical values before
+numbering, retaining identical rows and null/duplicate business keys.
+`source_primary_keys` may be omitted; if supplied its fields must still exist
+in the physical projection. Generated fields are not SAQL source columns and
+must not appear in `selected_columns`.
+
+Numbers restart per version. The version component prevents incorrect entity
+matches when numbers repeat across versions; this identity does not follow a
+business entity through changes. SCD Type 1 replaces the previous version's raw
+rows and downstream steps can clean business keys. SCD Type 2 records histories
+of snapshot rows, not stable entities. This is not a global persistent sequence
+or an append-only capture archive. A schema/key/checkpoint migration or new
+target is required to enable/disable the mode or change the output name.
+
+Count, exact-page, scalar-value, metadata, visibility and budget checks remain.
+Generated uniqueness cannot prove source uniqueness or detect every equal-count
+repeated/missing row. Completion evidence explicitly marks
+`source_keys_validated=false`; validate source-to-target row multiplicities and
+ordering/collation behavior on real data before relying on this mode.
 
 ## Object's ingestion type
 
@@ -277,7 +300,8 @@ describes that boundary, not an included archive implementation.
 
 ### Version pinning and metadata consistency
 
-Implemented table options use `source_primary_keys` and optional explicit `version_id`.
+Implemented table options use `source_primary_keys` (optional with generated
+identity), optional `auto_increment_column`, and optional explicit `version_id`.
 The separate common pipeline `primary_keys` override uses mapped destination
 names; source identifiers must not be supplied through that reserved override
 unless they equal the mapped names. `column_name_mode=readable` preserves simple

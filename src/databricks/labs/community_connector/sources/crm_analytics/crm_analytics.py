@@ -37,6 +37,7 @@ from databricks.labs.community_connector.sources.crm_analytics.crm_analytics_sup
 
 _ID = re.compile(r"[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?\Z")
 _RETRY_STATUSES = {429, 500, 502, 503, 504}
+_GENERATED_VERSION_COLUMN = "_crm_analytics_version_id"
 _DATE_PARTS = {
     "day",
     "epochDay",
@@ -80,7 +81,10 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
     identity), optional version_id, decimal_precision (default 38), decimal_scale
     (default 18), max_keys (default 1000000), column_name_mode (readable by default,
     or legacy_hex for prototype schemas), selected_columns (exact source names),
-    max_query_requests (default 2000), max_read_seconds (default 1800).
+    max_query_requests (default 2000), max_read_seconds (default 1800), and
+    auto_increment_column (optional output name for raw per-version row IDs).
+    Generated mode preserves duplicate/null business keys and uses the version
+    ID plus row number as destination keys; source_primary_keys becomes optional.
     Exceeding limits fails, never truncates.
     Instances are for sequential use, not concurrent threads. Call close() to
     release pooled HTTP connections; a later request lazily opens a new session.
@@ -362,6 +366,7 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
             "max_keys",
             "column_name_mode",
             "selected_columns",
+            "auto_increment_column",
             "max_query_requests",
             "max_read_seconds",
         }
@@ -378,7 +383,21 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
         if mode not in ("readable", "legacy_hex"):
             raise CrmAnalyticsError("column_name_mode must be readable or legacy_hex")
         options["column_name_mode"] = mode
-        keys = _field_list(options.get("source_primary_keys"), "source_primary_keys")
+        auto_column = options.get("auto_increment_column")
+        if "auto_increment_column" in options and (
+            not isinstance(auto_column, str)
+            or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", auto_column)
+            or auto_column.lower() == _GENERATED_VERSION_COLUMN.lower()
+        ):
+            raise CrmAnalyticsError(
+                "auto_increment_column must be an ASCII output identifier of 1..128 characters "
+                "and must differ from the reserved generated version column"
+            )
+        keys = (
+            []
+            if auto_column and "source_primary_keys" not in options
+            else _field_list(options.get("source_primary_keys"), "source_primary_keys")
+        )
         options["source_primary_keys"] = keys
         if "selected_columns" in options:
             selected = _field_list(options["selected_columns"], "selected_columns")
@@ -398,9 +417,16 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                     raise CrmAnalyticsError(
                         "primary_keys override must contain mapped destination names"
                     ) from None
-            if destination_keys != [encode_column_name(_field_name(k), mode) for k in keys]:
+            expected_keys = (
+                [_GENERATED_VERSION_COLUMN, auto_column]
+                if auto_column
+                else [encode_column_name(_field_name(k), mode) for k in keys]
+            )
+            if destination_keys != expected_keys:
                 raise CrmAnalyticsError(
-                    "primary_keys override does not match mapped source_primary_keys"
+                    "primary_keys override does not match generated version/row keys"
+                    if auto_column
+                    else "primary_keys override does not match mapped source_primary_keys"
                 )
         precision = _integer(options.get("decimal_precision", "38"), "decimal_precision", 1, 38)
         options["decimal_precision"] = precision
@@ -542,8 +568,9 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
             )
         if not kinds:
             raise CrmAnalyticsError("Pinned XMD contains no supported physical columns")
+        auto_column = options.get("auto_increment_column")
         for key in options["source_primary_keys"]:
-            if kinds.get(key) != "string":
+            if key not in kinds or (not auto_column and kinds[key] != "string"):
                 raise CrmAnalyticsError(
                     "Each primary key must be a scalar dimension/physical date string in XMD"
                 )
@@ -568,6 +595,25 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                 for name, kind in sorted(kinds.items())
             ]
         )
+        if auto_column:
+            generated_names = {_GENERATED_VERSION_COLUMN.lower(), auto_column.lower()}
+            if generated_names.intersection(name.lower() for name in mapping.values()):
+                raise CrmAnalyticsError(
+                    "A generated column collides with a physical destination column"
+                )
+            schema.add(
+                StructField(
+                    _GENERATED_VERSION_COLUMN,
+                    StringType(),
+                    False,
+                    {"crm_analytics_generated": "dataset_version"},
+                )
+            )
+            schema.add(
+                StructField(
+                    auto_column, LongType(), False, {"crm_analytics_generated": "row_number"}
+                )
+            )
         return schema, mapping, kinds
 
     @staticmethod
@@ -610,13 +656,18 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
             version = self._version(name, version_id, budget=budget)
             schema, mapping, kinds = self._schema(version, options)
             security = self._security(dataset, version)
+            auto_column = options.get("auto_increment_column")
             descriptor = {
                 "dataset_id": name,
                 "version_id": version_id,
                 "source_created_at": self._created_at(version),
                 "expected_row_count": int(version["totalRowCount"]),
                 "source_primary_keys": options["source_primary_keys"],
-                "primary_keys": [mapping[k] for k in options["source_primary_keys"]],
+                "primary_keys": (
+                    [_GENERATED_VERSION_COLUMN, auto_column]
+                    if auto_column
+                    else [mapping[k] for k in options["source_primary_keys"]]
+                ),
                 "column_name_mode": options["column_name_mode"],
                 "projection_mode": "explicit" if "selected_columns" in options else "all_physical",
                 "selected_columns": options.get("selected_columns"),
@@ -639,9 +690,15 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                         "schema": schema.jsonValue(),
                         "scope": options["scope_fingerprint"],
                         "supported_scope": options["supported_scope"],
+                        **({"auto_increment_column": auto_column} if auto_column else {}),
                     }
                 ),
             }
+            if auto_column:
+                descriptor.update(
+                    auto_increment_column=auto_column,
+                    key_mode="version_row_number",
+                )
             self._contexts[key] = {"descriptor": descriptor, "options": options, "kinds": kinds}
         return key, self._contexts[key]
 
@@ -774,7 +831,9 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
             )
         budget.remaining()
 
-    def _convert_row(self, row: dict, context: dict) -> tuple[dict, tuple]:
+    def _convert_row(
+        self, row: dict, context: dict, row_number: int | None = None
+    ) -> tuple[dict, tuple]:
         descriptor, options = context["descriptor"], context["options"]
         mapping = descriptor["column_mapping"]
         if set(row) != set(mapping.values()):
@@ -783,6 +842,12 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
             target: self._value(row[target], context["kinds"][source], options)
             for source, target in mapping.items()
         }
+        auto_column = options.get("auto_increment_column")
+        if auto_column:
+            if row_number is None:
+                raise CrmAnalyticsError("Missing generated row number")
+            converted[_GENERATED_VERSION_COLUMN] = descriptor["version_id"]
+            converted[auto_column] = row_number
         row_key = tuple(converted[k] for k in descriptor["primary_keys"])
         if any(value is None for value in row_key):
             raise CrmAnalyticsError("Null or duplicate primary key in snapshot")
@@ -817,7 +882,15 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
         load = f'q = load "{name}/{version_id}";'
         mapping = descriptor["column_mapping"]
         projection = ", ".join(f"'{source}' as '{target}'" for source, target in mapping.items())
-        order = ", ".join(f"'{key}' asc" for key in descriptor["primary_keys"])
+        # A generated number is assigned after retrieval. Order by every physical
+        # projected value so rows with duplicate business keys remain repeatable.
+        # Equal full projections are indistinguishable; retain every occurrence.
+        order_columns = (
+            list(mapping.values())
+            if options.get("auto_increment_column")
+            else descriptor["primary_keys"]
+        )
+        order = ", ".join(f"'{column}' asc" for column in order_columns)
         query = load + f" q = foreach q generate {projection}; q = order q by ({order});"
 
         def check_read():
@@ -844,9 +917,9 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                     # The exact-length check above requires the terminal page
                     # to be empty; a nonempty terminal page already failed.
                     break
-                for row in rows:
+                for index, row in enumerate(rows, start=offset + 1):
                     check_read()
-                    converted, row_key = self._convert_row(row, context)
+                    converted, row_key = self._convert_row(row, context, row_number=index)
                     if row_key in seen:
                         raise CrmAnalyticsError("Null or duplicate primary key in snapshot")
                     seen.add(row_key)
@@ -868,6 +941,11 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                 "terminal_empty_page": True,
                 "metadata_revalidated": True,
                 "scope_fingerprint": options["scope_fingerprint"],
+                **(
+                    {"key_mode": "version_row_number", "source_keys_validated": False}
+                    if options.get("auto_increment_column")
+                    else {}
+                ),
                 **budget.metrics(),
             }
 

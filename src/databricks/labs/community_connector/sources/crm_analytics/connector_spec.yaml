@@ -105,17 +105,33 @@ connection:
 # Complete connector table-option contract. Do not place these options in the
 # connection parameters. Framework/connection transport (including source_name)
 # is ignored by the connector and is not a dataset filter or table option.
-external_options_allowlist: "source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds"
+external_options_allowlist: "source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,auto_increment_column,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds"
 
 # Table option documentation (all values are transported as strings):
-# source_primary_keys (required): JSON array of distinct SOURCE physical field
-#   names, e.g. ["Account.Id","FiscalYear"]. Keys must exist in pinned XMD as
-#   scalar dimensions/physical date strings and be unique and non-null across
-#   the full snapshot. No automatic key inference is performed.
+# source_primary_keys (required unless auto_increment_column is set): JSON array
+#   of distinct SOURCE physical field
+#   names, e.g. ["Account.Id","FiscalYear"]. In default mode these must exist in
+#   pinned XMD as scalar dimensions/physical date strings and be unique and
+#   non-null across the full snapshot. No automatic key inference is performed.
+# auto_increment_column (optional): output column name, ASCII letter/underscore
+#   followed by letters/digits/underscores, at most 128 characters. Enables raw
+#   ingestion with BIGINT row numbers 1..N per pinned version and adds the STRING
+#   _crm_analytics_version_id column. These two generated columns, in version/row
+#   order, become the destination primary keys. Business-key duplicates and nulls
+#   are retained for downstream cleaning; source_primary_keys may be omitted.
+#   Provided source-key names must still exist in the physical projection.
+#   Generated names must not collide case-insensitively with physical outputs.
+#   Do not include generated columns in selected_columns. Ordering uses every
+#   projected physical field. This is not a globally persistent sequence or a
+#   stable business identity across versions. SCD_TYPE_1 retains the current raw
+#   snapshot; each new version replaces prior-version rows. Use a new target or
+#   an explicit migration when enabling/disabling or renaming this option.
 # primary_keys (optional): reserved pipeline DESTINATION-key override. Normally
 #   omit it and use read_table_metadata().primary_keys. If supplied it must be a
 #   JSON array matching source_primary_keys mapped under column_name_mode, in
-#   the same order. It is not an alias for source_primary_keys.
+#   the same order. With generated identity, the exact override instead is
+#   ["_crm_analytics_version_id", "<auto_increment_column>"]. Prefer omitting it.
+#   It is not an alias for source_primary_keys.
 # column_name_mode (optional): readable (default) or legacy_hex. Readable names
 #   preserve ASCII letters/digits/underscores, map dots to __, escape other code
 #   points as _uXXXX_ (lowercase hex, minimum four digits), and prefix digit-leading

@@ -10,7 +10,7 @@ No Java runtime, Salesforce organization, or Databricks workspace was used.
 
 ### Customer metadata follow-up — 2026-10-30
 
-The current synthetic source suite passes **337 tests with 2 expected skips**;
+The current synthetic source suite passes **389 tests with 2 expected skips**;
 the separate registry suite passes **9 tests**. The combined command is:
 
 ```bash
@@ -41,6 +41,29 @@ metadata. Source Pylint using the repository configuration scores 10.00/10.
 These are synthetic reproductions of the reported behavior. The customer's
 specific unmatched field has not been identified from their metadata, and this
 follow-up does not establish live Salesforce ingestion or customer deployment.
+
+### Generated row identity — 2026-10-30
+
+An additional **52 synthetic regression cases** exercise both packaged and merged
+deployment readers with `auto_increment_column`. They preserve duplicate/null
+business keys and identical rows across pages, verify 1..N numbering and the
+version/number key pair, and confirm stable repeat reads despite page-size and
+input-order changes. Versions can reuse numbers without overlapping keys.
+
+The suite checks optional/retained source keys, exact destination-key overrides,
+empty snapshots, generated-name validation/collisions, readable and legacy
+physical names, configuration/schema fingerprints, and generated field metadata.
+Separate schema/read instances run 407 rows through the actual Python framework
+batch reader in eight SAQL requests. Malformed pages/counts/metadata, unsupported
+values, and impossible budgets still fail. Existing strict-mode regressions
+continue to reject duplicate/null business keys.
+
+These tests establish synthetic behavior, not Salesforce ordering/collation,
+multiset equality, or actual Spark/Delta snapshot application. Generated keys
+are technical row addresses; completion evidence explicitly reports
+`source_keys_validated=false`. Validate full source/target row multiplicities,
+wide projection ordering, schema/key migration, version transitions and runtime
+restart behavior before enabling this mode on a customer destination.
 
 ### Historical source baseline — 2026-10-02
 

@@ -1,12 +1,12 @@
 # CRM Analytics framework integration
 
-Status: source implementation and offline contract tests only, 2026-10-02.
+Status: source implementation and offline contract tests; updated 2026-10-30.
 Framework baseline: `ddc153b9741b686759ad85f25d2d45ca8a6ac24b`.
 
 ## Connector responsibility
 
 `CrmAnalyticsLakeflowConnect` discovers datasets, maps pinned main XMD to a
-schema, declares `snapshot` ingestion and configured destination business keys,
+schema, declares `snapshot` ingestion and configured destination keys,
 and yields every row of the selected version and column projection.
 `CrmAnalyticsDataSource` exposes it through the framework's `lakeflow_connect`
 data source.
@@ -29,6 +29,30 @@ returns the corresponding DESTINATION names. The shared pipeline strips its
 `primary_keys` override before invoking the source, then uses it downstream;
 omit that override unless it exactly matches the names returned by the connector.
 The source cannot validate an override it never receives.
+
+With `auto_increment_column="_ingestion_row_id"`, source metadata instead
+returns `["_crm_analytics_version_id", "_ingestion_row_id"]` as destination keys.
+Both generated fields are added after the exact physical source projection is
+validated. The version is constant per pinned dataset version and numbers run
+from 1 through N across every page. All physical projected fields participate in
+the source ordering; identical projected rows retain every occurrence. Business
+keys can be duplicate or null, and `source_primary_keys` may be omitted. The
+standard snapshot pipeline consumes this metadata without a new framework mode.
+
+Use a new raw target or an explicit key/schema/checkpoint migration when
+enabling, disabling, or renaming the generated column. Omit the shared
+`primary_keys` override so it cannot replace the generated pair with duplicate
+business keys. In SCD Type 1 a new version replaces prior-version raw rows.
+The pair identifies a snapshot row, not a business entity across versions;
+SCD Type 2 therefore records histories of versioned snapshot rows. This mode is
+not append-only archival capture and the counter is not global across versions.
+
+Generated uniqueness is technical and cannot prove source uniqueness or detect
+every equal-count repeated/missing row. Completed-read evidence marks
+`key_mode="version_row_number"` and `source_keys_validated=false`. Count, page,
+type, visibility, metadata and budget safeguards remain active. Validate full
+source-to-target multiset equality, wide-projection ordering, repeated reads,
+version transitions, and real Spark/Delta application before deployment.
 
 Readability must not change identity: persist the original field names in Spark
 field metadata and the descriptor's `column_mapping`. Keep naming mode, keys,

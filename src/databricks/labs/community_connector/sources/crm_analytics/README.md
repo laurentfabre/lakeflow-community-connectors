@@ -24,9 +24,10 @@ use. Offline checks do not establish production readiness.
   permissions, sharing rules, and security predicates must not narrow that
   identity's view during or between captures without an approved new baseline.
 - Scalar physical columns described by the dataset's main extended metadata
-  (XMD), and configured business keys that are stable, unique, and non-null
-  across the entire dataset. Selected multivalue or derived/calculated columns
-  are not supported; an explicit `selected_columns` projection can exclude them.
+  (XMD), and either stable, unique, non-null business keys or the explicit
+  generated-row identity mode for raw ingestion. Selected multivalue or
+  derived/calculated columns are not supported; an explicit `selected_columns`
+  projection can exclude them.
 - An explicit REST API version supported by the target organization, at least
   `53.0`. The edition of a Salesforce guide is not evidence that a version is
   enabled for your organization.
@@ -60,7 +61,7 @@ pipeline specification. Never put credentials in source code or fixtures.
 Set `externalOptionsAllowList` to:
 
 ```text
-source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds
+source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,auto_increment_column,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds
 ```
 
 These table options belong under each table's `table_configuration`, not in the
@@ -133,7 +134,7 @@ includes only `Default` datasets with a current materialized version.
 
 | Object category | Ingestion mode | Keys | Source cursor |
 | --- | --- | --- | --- |
-| Materialized `Default` dataset with supported scalar physical columns and full visibility | Complete `snapshot` | Operator-supplied source dimension/date-string keys, mapped to destination names | None |
+| Materialized `Default` dataset with supported scalar physical columns and full visibility | Complete `snapshot` | Source dimension/date-string keys by default; optional version + generated row number for raw ingestion | None |
 
 Each capture selects one version and uses it for the schema, count queries, and
 every page. Pass an explicit `version_id` whenever schema discovery and reading
@@ -219,6 +220,54 @@ Use original physical names in `source_primary_keys`. The common pipeline
 destination names in the same order. Prefer omitting that override so the
 pipeline uses the connector-provided keys. A dataset ID is not a row key.
 
+### Raw ingestion with an auto-increment column
+
+Set `auto_increment_column` to an output name when duplicate or null business
+keys need to land unchanged for downstream cleaning:
+
+```json
+{
+  "scd_type": "SCD_TYPE_1",
+  "auto_increment_column": "_ingestion_row_id",
+  "selected_columns": ["Account.Id", "Region", "Amount"],
+  "supported_scope": "scalar_full_visibility",
+  "scope_fingerprint": "<APPROVED_STABLE_VISIBILITY_SCOPE>"
+}
+```
+
+The connector adds `_ingestion_row_id` (`BIGINT`, 1 through N per version) and
+`_crm_analytics_version_id` (`STRING`). It returns these two columns, in
+version/number order, as the destination primary keys. Identical rows and null
+or duplicate business keys are preserved. `source_primary_keys` may be omitted;
+if retained, its names must still be physical projected fields. Omit the common
+`primary_keys` override so the framework uses the generated pair. Keep generated
+columns out of `selected_columns`: they are added locally after source retrieval.
+
+Numbers restart at 1 for each dataset version. The version component prevents
+number reuse from linking unrelated rows across versions. The reader orders
+each pinned snapshot by every projected physical column before numbering;
+identical projections retain all occurrences. Fixed pins/projections can be
+reread without consuming persistent sequence state. This is not a global sequence
+or a stable business-entity ID. Ordering and pagination of wide projections need
+representative live validation. Generated uniqueness does not independently
+prove source uniqueness or detect every repeated/missing source row.
+
+With `SCD_TYPE_1`, the target contains the latest accepted raw snapshot; a new
+version replaces prior-version rows. Perform business deduplication and key
+selection downstream. `SCD_TYPE_2` represents histories of versioned snapshot
+rows rather than stable business entities. All count, page, scalar-value,
+metadata, visibility and budget checks still apply. The generated pair supplies
+row identity without enforcing uniqueness or non-null business keys.
+
+The output name must be an ASCII letter/underscore followed by ASCII letters,
+digits or underscores, at most 128 characters. Both generated names must be
+distinct from physical destination names, ignoring case; names remain literal
+in `legacy_hex` mode. Enabling/disabling the option or renaming the column changes
+the schema and key contract: use a new raw destination or migrate the existing
+target/checkpoint explicitly. Redeploy the generated source or rebuild the source
+wheel, and add `auto_increment_column` to an existing connection's
+`externalOptionsAllowList` before using it.
+
 ## Table Configurations
 
 ### Source & Destination
@@ -237,7 +286,7 @@ Set these directly under each `table` object in the pipeline specification:
 | Option | Required | Description |
 | --- | --- | --- |
 | `scd_type` | No | `SCD_TYPE_1` by default, or the framework's `SCD_TYPE_2` snapshot history mode. This is snapshot comparison, not source-native CDC. `APPEND_ONLY` is not supported for this snapshot source. |
-| `primary_keys` | No | Destination-key override. Normally omit. If supplied, use the exact mapped counterpart of `source_primary_keys` for the chosen naming mode, in the same order. |
+| `primary_keys` | No | Destination-key override. Normally omit. Must match the connector's keys: mapped source keys by default, or `["_crm_analytics_version_id", "<auto_increment_column>"]` in generated mode. |
 | `sequence_by` | No | Leave unset. The snapshot source has no row cursor, and the snapshot pipeline does not use this option to order dataset versions. |
 | `cluster_by` | No | Mapped destination columns for Liquid Clustering; consumed by the pipeline, not forwarded to the source. |
 
@@ -245,7 +294,8 @@ Set these directly under each `table` object in the pipeline specification:
 
 | Option | Required | Description |
 | --- | --- | --- |
-| `source_primary_keys` | Yes | Nonempty JSON array of distinct source physical column names, such as `["Account.Id","FiscalYear"]`. Each must be a scalar dimension or physical date string, never a numeric measure/epoch. Composite keys must be unique and non-null across the full snapshot. |
+| `source_primary_keys` | Unless generated mode | Nonempty JSON array of distinct source physical column names, such as `["Account.Id","FiscalYear"]`. Default keys must be scalar dimension/date strings, unique and non-null across the full snapshot. Optional in generated mode, where provided names must still be physical projected fields. |
+| `auto_increment_column` | No | Output name enabling raw ingestion: adds a `BIGINT` row number 1..N per version and `_crm_analytics_version_id`; their pair becomes the destination key. Preserves duplicate/null business keys. Requires a new target or explicit migration. |
 | `supported_scope` | Yes | Exactly `scalar_full_visibility`. This is your attestation that the chosen projection has supported scalar values and stable full row visibility; it is not proof derived automatically from Salesforce. |
 | `scope_fingerprint` | Yes | Nonblank, stable, operator-managed identifier for the approved principal/visibility scope; at most 1,024 characters. Do not use a token, run ID, or capture timestamp. Changes require an approved new baseline, not inferred deletions against an old target. |
 | `version_id` | No | Exact 15- or 18-character dataset-version ID. Otherwise current version is resolved once per table context. Explicitly pin it across independent schema/read contexts. |
