@@ -324,6 +324,7 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
             "databricks.connection",
             "instance_url",
             "access_token",
+            "access_token_expiration",
             "api_version",
             "page_size",
             "timeout_seconds",

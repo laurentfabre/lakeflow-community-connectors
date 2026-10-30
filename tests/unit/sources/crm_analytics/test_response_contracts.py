@@ -60,6 +60,20 @@ def dataset_type_response(value):
     return transform
 
 
+@pytest.mark.parametrize("option_name", ["access_token_expiration", "ACCESS_TOKEN_EXPIRATION"])
+def test_connection_token_expiration_does_not_change_snapshot_identity(source, option_name):
+    baseline = source.pin_table(DATASET, OPTIONS)
+    options = {**OPTIONS, option_name: "2026-10-30T17:00:00Z"}
+    assert source.pin_table(DATASET, options) == baseline
+    assert len(exhaust(source, options)) == 7
+    evidence = source.get_read_evidence(DATASET, options)
+    assert evidence["extracted_row_count"] == 7
+    # Token rotation changes connection metadata, not the source data contract.
+    rotated = {**options, option_name: "2026-10-30T18:00:00Z"}
+    assert source.pin_table(DATASET, rotated) == baseline
+    assert source.get_read_evidence(DATASET, rotated) == evidence
+
+
 @pytest.mark.parametrize("dataset_type", ["default", "Default"])
 def test_default_response_casing_in_discovery_and_complete_read(source, wire, dataset_type):
     wire[1]["transform"] = dataset_type_response(dataset_type)

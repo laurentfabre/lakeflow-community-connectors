@@ -10,7 +10,7 @@ No Java runtime, Salesforce organization, or Databricks workspace was used.
 
 ### Customer metadata follow-up — 2026-10-30
 
-The current synthetic source suite passes **333 tests with 2 expected skips**;
+The current synthetic source suite passes **337 tests with 2 expected skips**;
 the separate registry suite passes **9 tests**. The combined command is:
 
 ```bash
@@ -18,12 +18,19 @@ CONNECTOR_TEST_MODE=simulate .venv/bin/python -m pytest \
   tests/unit/sources/crm_analytics/ tests/unit/sparkpds_registry_test.py -q
 ```
 
-The 44 added regressions run against both the package and the registered merged
+The 48 added regressions run against both the package and the registered merged
 deployment source. They verify lowercase `datasetType: "default"` responses in
 discovery, metadata resolution, and complete reads; historical `"Default"` also
 works. The query enum remains `datasetTypes=Default`. Other/malformed dataset
 types fail before query execution, and a type change during final revalidation
 still invalidates the snapshot.
+
+The connection-supplied `access_token_expiration` key is treated as transport
+metadata. Lowercase and uppercase option keys support complete reads without
+changing the pinned descriptor, configuration fingerprint, or read evidence as
+the expiry changes. The 407-row framework batch-reader test includes this
+metadata in both column naming modes. Token refresh remains the connection
+layer's responsibility; the reader does not interpret this expiry metadata.
 
 Unknown `selected_columns` errors now identify unmatched fields and provide
 bounded case-sensitive or destination-name hints, or available source names.

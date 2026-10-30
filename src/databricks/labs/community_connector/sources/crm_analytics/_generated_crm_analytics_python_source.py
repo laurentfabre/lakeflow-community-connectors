@@ -1102,6 +1102,7 @@ def register_lakeflow_source(spark):
                 "databricks.connection",
                 "instance_url",
                 "access_token",
+                "access_token_expiration",
                 "api_version",
                 "page_size",
                 "timeout_seconds",
