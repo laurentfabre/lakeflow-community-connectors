@@ -30,6 +30,7 @@ from databricks.labs.community_connector.sources.crm_analytics.crm_analytics_sup
     _fingerprint,
     _integer,
     _response_body,
+    _unknown_columns_message,
     decode_column_name,
     encode_column_name,
 )
@@ -59,6 +60,12 @@ def _identifier(value, name: str) -> str:
     if not isinstance(value, str) or not _ID.fullmatch(value):
         raise CrmAnalyticsError(f"{name} must be a 15- or 18-character Salesforce ID")
     return value
+
+
+def _is_default_dataset_type(value) -> bool:
+    # The datasetTypes request enum is "Default"; resource responses can use
+    # lowercase "default". Type casing does not change the supported scope.
+    return isinstance(value, str) and value.casefold() == "default"
 
 
 class CrmAnalyticsLakeflowConnect(LakeflowConnect):
@@ -284,7 +291,9 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                 raise CrmAnalyticsError("Dataset discovery changed during pagination")
             expected = total
             for dataset in rows:
-                if not isinstance(dataset, dict) or dataset.get("datasetType") != "Default":
+                if not isinstance(dataset, dict) or not _is_default_dataset_type(
+                    dataset.get("datasetType")
+                ):
                     raise CrmAnalyticsError("Unexpected dataset type in discovery")
                 name = _identifier(dataset.get("id"), "dataset id")
                 _identifier(dataset.get("currentVersionId"), "current version id")
@@ -410,7 +419,7 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
 
     def _dataset(self, name: str, budget=None) -> dict:
         body = self._request("GET", self._base + f"/datasets/{name}", budget=budget)
-        if body.get("id") != name or body.get("datasetType") != "Default":
+        if body.get("id") != name or not _is_default_dataset_type(body.get("datasetType")):
             raise CrmAnalyticsError("Dataset identity/type changed or is unsupported")
         return body
 
@@ -480,6 +489,7 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
             )
         selected = set(options["selected_columns"]) if "selected_columns" in options else None
         kinds = {}
+        physical = set()
 
         def identity(name):
             # Projection can exclude an unsafe SAQL identifier, but never hide
@@ -490,6 +500,8 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
 
         def add(name, kind, *, supported=True):
             name = identity(name)
+            if supported:
+                physical.add(name)
             if selected is not None and name not in selected:
                 return
             name = _field_name(name)
@@ -522,7 +534,11 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
         ):
             add(name, kind, supported=supported)
         if selected is not None and set(kinds) != selected:
-            raise CrmAnalyticsError("selected_columns contains an unknown physical field")
+            raise CrmAnalyticsError(
+                _unknown_columns_message(
+                    selected - set(kinds), physical, options["column_name_mode"]
+                )
+            )
         if not kinds:
             raise CrmAnalyticsError("Pinned XMD contains no supported physical columns")
         for key in options["source_primary_keys"]:

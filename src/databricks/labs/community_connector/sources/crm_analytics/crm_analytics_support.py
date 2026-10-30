@@ -100,6 +100,40 @@ def _field_list(value, option_name: str) -> list[str]:
     return [_field_name(name) for name in value]
 
 
+def _unknown_columns_message(unknown: set[str], physical: set[str], mode: str) -> str:
+    """Describe a rejected projection without remapping or dropping any field."""
+    available = set()
+    for name in physical:
+        try:
+            available.add(_field_name(name))
+        except CrmAnalyticsError:
+            # Unselected unsafe names remain excludable, including surrogates.
+            continue
+
+    def sample(names):
+        values = [name[:64] + ("..." if len(name) > 64 else "") for name in sorted(names)[:5]]
+        return f"{json.dumps(values, ensure_ascii=True)} ({len(names)} total)"
+
+    folded = {name.casefold() for name in unknown}
+    case_matches = {name for name in available if name.casefold() in folded}
+    alias_matches = {name for name in available if encode_column_name(name, mode) in unknown}
+    message = (
+        "selected_columns contains an unknown physical field: " + sample(unknown) + ". "
+        "Use exact, case-sensitive source names from the pinned version's main XMD "
+        "(dimensions[].field, measures[].field, dates[].fields), "
+        "not labels or destination column names."
+    )
+    if case_matches:
+        message += " Case-sensitive matches: " + sample(case_matches) + "."
+    if alias_matches:
+        message += (
+            " Destination-name matches (use these source names): " + sample(alias_matches) + "."
+        )
+    if not case_matches and not alias_matches:
+        message += " Available physical fields: " + sample(available) + "."
+    return message
+
+
 def _response_body(response) -> dict:
     if len(response.content) > 64 * 1024 * 1024:
         raise CrmAnalyticsError("CRM Analytics response exceeds the 64 MiB safety limit")

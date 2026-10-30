@@ -8,6 +8,35 @@ No Java runtime, Salesforce organization, or Databricks workspace was used.
 
 ## Verified locally
 
+### Customer metadata follow-up — 2026-10-30
+
+The current synthetic source suite passes **333 tests with 2 expected skips**;
+the separate registry suite passes **9 tests**. The combined command is:
+
+```bash
+CONNECTOR_TEST_MODE=simulate .venv/bin/python -m pytest \
+  tests/unit/sources/crm_analytics/ tests/unit/sparkpds_registry_test.py -q
+```
+
+The 44 added regressions run against both the package and the registered merged
+deployment source. They verify lowercase `datasetType: "default"` responses in
+discovery, metadata resolution, and complete reads; historical `"Default"` also
+works. The query enum remains `datasetTypes=Default`. Other/malformed dataset
+types fail before query execution, and a type change during final revalidation
+still invalidates the snapshot.
+
+Unknown `selected_columns` errors now identify unmatched fields and provide
+bounded case-sensitive or destination-name hints, or available source names.
+Names remain exact and case-sensitive; hints never remap or omit columns. Tests
+cover readable/legacy aliases and bounded diagnostics with unsafe unselected
+metadata. Source Pylint using the repository configuration scores 10.00/10.
+
+These are synthetic reproductions of the reported behavior. The customer's
+specific unmatched field has not been identified from their metadata, and this
+follow-up does not establish live Salesforce ingestion or customer deployment.
+
+### Historical source baseline — 2026-10-02
+
 Run from the repository root:
 
 ```bash

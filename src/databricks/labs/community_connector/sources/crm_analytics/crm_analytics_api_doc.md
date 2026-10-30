@@ -108,7 +108,9 @@ Expose the dataset's opaque `id` as the table name; retain `name` and `label`
 only as display information. An API/developer name can be renamed; a label need
 not be unique. IDs are not sortable cursors. Treat a disappeared or inaccessible
 dataset as an error, not an empty table. Restrict the first implementation to
-`datasetType == "Default"`; `Live`, `StagedData`, and `Trended` are deferred.
+materialized Default datasets. The request filter is `datasetTypes=Default`;
+resource responses may return `datasetType: "default"` or `"Default"`, which the
+connector compares case-insensitively. `Live`, `StagedData`, and `Trended` are deferred.
 
 The versions collection has documented `url` and `versions` fields, not a
 documented row-pagination token. Optional version-list parameters
@@ -190,6 +192,15 @@ Malformed metadata remains an error. Valid changes confined to unselected fields
 do not change the projected schema. Projection mode/list is part of the data
 configuration fingerprint and requires migration when changed. Selection never
 filters rows or weakens full-visibility/completeness checks.
+
+Selection values are case-sensitive **source** names, not XMD labels or encoded
+destination names: select `Account.Id`, not `Account__Id`; select `Amount`, not
+`amount`. Read names from the pinned version's `xmdMain.dimensions[].field`,
+`measures[].field`, and the values of `dates[].fields`. A logical date name or a
+field from another version may be absent from this physical inventory. Unknown
+selection errors list unmatched names and bounded case/destination-name hints,
+or a sample of available physical fields. Hints never rewrite the selection or
+silently drop fields. Correct the configuration using the pinned metadata.
 
 The remaining XMD dimension properties are `conditionalFormatting`,
 `customActions`, `customActionsEnabled`, `defaultAction`, `label`,

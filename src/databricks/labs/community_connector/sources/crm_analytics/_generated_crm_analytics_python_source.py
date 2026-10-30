@@ -693,6 +693,40 @@ def register_lakeflow_source(spark):
         return [_field_name(name) for name in value]
 
 
+    def _unknown_columns_message(unknown: set[str], physical: set[str], mode: str) -> str:
+        """Describe a rejected projection without remapping or dropping any field."""
+        available = set()
+        for name in physical:
+            try:
+                available.add(_field_name(name))
+            except CrmAnalyticsError:
+                # Unselected unsafe names remain excludable, including surrogates.
+                continue
+
+        def sample(names):
+            values = [name[:64] + ("..." if len(name) > 64 else "") for name in sorted(names)[:5]]
+            return f"{json.dumps(values, ensure_ascii=True)} ({len(names)} total)"
+
+        folded = {name.casefold() for name in unknown}
+        case_matches = {name for name in available if name.casefold() in folded}
+        alias_matches = {name for name in available if encode_column_name(name, mode) in unknown}
+        message = (
+            "selected_columns contains an unknown physical field: " + sample(unknown) + ". "
+            "Use exact, case-sensitive source names from the pinned version's main XMD "
+            "(dimensions[].field, measures[].field, dates[].fields), "
+            "not labels or destination column names."
+        )
+        if case_matches:
+            message += " Case-sensitive matches: " + sample(case_matches) + "."
+        if alias_matches:
+            message += (
+                " Destination-name matches (use these source names): " + sample(alias_matches) + "."
+            )
+        if not case_matches and not alias_matches:
+            message += " Available physical fields: " + sample(available) + "."
+        return message
+
+
     def _response_body(response) -> dict:
         if len(response.content) > 64 * 1024 * 1024:
             raise CrmAnalyticsError("CRM Analytics response exceeds the 64 MiB safety limit")
@@ -804,6 +838,12 @@ def register_lakeflow_source(spark):
         if not isinstance(value, str) or not _ID.fullmatch(value):
             raise CrmAnalyticsError(f"{name} must be a 15- or 18-character Salesforce ID")
         return value
+
+
+    def _is_default_dataset_type(value) -> bool:
+        # The datasetTypes request enum is "Default"; resource responses can use
+        # lowercase "default". Type casing does not change the supported scope.
+        return isinstance(value, str) and value.casefold() == "default"
 
 
     class CrmAnalyticsLakeflowConnect(LakeflowConnect):
@@ -1029,7 +1069,9 @@ def register_lakeflow_source(spark):
                     raise CrmAnalyticsError("Dataset discovery changed during pagination")
                 expected = total
                 for dataset in rows:
-                    if not isinstance(dataset, dict) or dataset.get("datasetType") != "Default":
+                    if not isinstance(dataset, dict) or not _is_default_dataset_type(
+                        dataset.get("datasetType")
+                    ):
                         raise CrmAnalyticsError("Unexpected dataset type in discovery")
                     name = _identifier(dataset.get("id"), "dataset id")
                     _identifier(dataset.get("currentVersionId"), "current version id")
@@ -1155,7 +1197,7 @@ def register_lakeflow_source(spark):
 
         def _dataset(self, name: str, budget=None) -> dict:
             body = self._request("GET", self._base + f"/datasets/{name}", budget=budget)
-            if body.get("id") != name or body.get("datasetType") != "Default":
+            if body.get("id") != name or not _is_default_dataset_type(body.get("datasetType")):
                 raise CrmAnalyticsError("Dataset identity/type changed or is unsupported")
             return body
 
@@ -1225,6 +1267,7 @@ def register_lakeflow_source(spark):
                 )
             selected = set(options["selected_columns"]) if "selected_columns" in options else None
             kinds = {}
+            physical = set()
 
             def identity(name):
                 # Projection can exclude an unsafe SAQL identifier, but never hide
@@ -1235,6 +1278,8 @@ def register_lakeflow_source(spark):
 
             def add(name, kind, *, supported=True):
                 name = identity(name)
+                if supported:
+                    physical.add(name)
                 if selected is not None and name not in selected:
                     return
                 name = _field_name(name)
@@ -1267,7 +1312,11 @@ def register_lakeflow_source(spark):
             ):
                 add(name, kind, supported=supported)
             if selected is not None and set(kinds) != selected:
-                raise CrmAnalyticsError("selected_columns contains an unknown physical field")
+                raise CrmAnalyticsError(
+                    _unknown_columns_message(
+                        selected - set(kinds), physical, options["column_name_mode"]
+                    )
+                )
             if not kinds:
                 raise CrmAnalyticsError("Pinned XMD contains no supported physical columns")
             for key in options["source_primary_keys"]:
