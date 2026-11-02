@@ -65,7 +65,7 @@ pipeline specification. Never put credentials in source code or fixtures.
 Set `externalOptionsAllowList` to:
 
 ```text
-source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,auto_increment_column,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds,expected_snapshot_fingerprint,key_validation_mode,key_validation_cache_kib,schema_baseline,schema_evolution_mode,diagnostic_action,diagnostic_dataset_id,diagnostic_table_options,diagnostic_check_count
+source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,auto_increment_column,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds,expected_snapshot_fingerprint,key_validation_mode,key_validation_cache_kib,schema_baseline,schema_evolution_mode,diagnostic_action,diagnostic_dataset_id,diagnostic_table_options,diagnostic_check_count,monitoring_volume_path
 ```
 
 These table options belong under each table's `table_configuration`, not in the
@@ -112,8 +112,10 @@ connection credentials. Common pipeline controls such as `scd_type` and
 Exact callback acceptance, PKCE, browser consent, token refresh/rotation, current
 token injection, and the match between the authorized identity and
 `instance_url` remain Phase 2 validation gates. The source reader does not
-refresh tokens itself: HTTP 401 fails the read and requires renewal through the
-connection or the separately configured local test credential provider.
+exchange or refresh tokens itself. The notebook preflight can request fresh
+UC credential injection once after an explicit authentication failure; see
+[OAuth lifecycle and recovery](#oauth-lifecycle-and-recovery). A 401 during
+extraction aborts the entire attempt.
 
 ### Create a Unity Catalog Connection
 
@@ -228,6 +230,133 @@ Direct callers with an already configured connector can use
 `inspect_dataset(dataset_id)`, and `get_extraction_plan(dataset_id, table_options)`.
 The private `_crm_analytics_diagnostics` report table is for notebook reads,
 not an ingestion destination or a source business dataset.
+
+### OAuth lifecycle and recovery
+
+Health, discovery and inspection reports include an `oauth_lifecycle` object.
+Expiry metadata is classified as `unknown`, `expired`, `expiring_soon` (within
+five minutes), or `future`. It is advisory: `source_access_verified` records
+whether the source probe succeeded with the injected credentials. A stored
+expired timestamp alone does not establish that current source access is broken.
+
+By default, `run_diagnostics(..., retry_authentication=True)` starts at most two
+fresh UC-backed Spark reads. It makes the second read only after an explicit
+`AUTHENTICATION` report. This requests runtime credential injection again; it
+does not call Salesforce's token endpoint or guarantee that UC can renew the
+grant. Permission, quota, configuration and generic execution errors are not
+retried through this path. Set `retry_authentication=False` for a single probe.
+`validate_pipeline` uses the same bounded diagnostic behavior.
+
+The lifecycle report includes `fresh_read_attempts`, `credential_reinjections`,
+`recovered`, and `reauthorization_required`. Before starting a configured
+workspace ingestion, use this gate in the pipeline notebook:
+
+```python
+from databricks.labs.community_connector import register
+from databricks.labs.community_connector.pipeline.ingestion_pipeline import ingest
+from databricks.labs.community_connector.sources.crm_analytics.crm_analytics_setup import (
+    ensure_connection,
+)
+
+register(spark, "crm_analytics")
+spark.conf.set("spark.databricks.unityCatalog.connectionDfOptionInjection.enabled", "true")
+
+# pipeline_spec is the reviewed workspace specification from setup.
+ensure_connection(spark, connection_name=pipeline_spec["connection_name"])
+ingest(spark, pipeline_spec)
+```
+
+The gate reads metadata only by default. A persistent 401 raises a sanitized,
+actionable authentication error: have the existing connection's owner
+reauthorize it as the **same Salesforce integration user**, verify `api` and
+`refresh_token` scopes and the Salesforce refresh-token policy, then retry.
+Revoked or expired refresh authorization still needs the owner's action. Keep
+the business targets and checkpoints; do not paste tokens into the spec.
+
+A 401 after extraction starts never resumes halfway or substitutes empty data.
+Retry the complete same pinned version in a newly started pipeline update,
+which requests runtime credentials again. Configure a bounded orchestration
+retry separately, for example one Job-task retry; the reader does not restart a
+snapshot or authorize retries indefinitely. Verify UC renewal and this retry
+path in the intended workspace before relying on scheduled operation.
+
+### Persistent monitoring and alerts
+
+Monitoring is disabled by default. To persist extraction-attempt events, add
+this option under the existing table's `table_configuration` and include it in
+the connection allowlist:
+
+```json
+{
+  "monitoring_volume_path": "/Volumes/main/crm_analytics/monitoring/events"
+}
+```
+
+Use an existing UC Volume and a runtime that supports Python writes to Volume
+paths. The pipeline execution identity needs `USE CATALOG`, `USE SCHEMA`, and
+`WRITE VOLUME`. The option accepts a literal `/Volumes/catalog/schema/volume`
+path with optional subdirectories, not a URI or traversal path. Enabling or
+changing monitoring does not change the source data fingerprint, target schema,
+keys or ingestion checkpoint. Keep the existing business target.
+
+Each extraction has an `attempt_id` and immutable JSON lifecycle events with
+unique `event_id` values: `started`, `completed`, `failed`, or `cancelled`.
+Events record dataset/version IDs, expected and extracted row counts, source
+publication time and age, elapsed time, pages, peak page rows, HTTP/query
+attempts, retries and backoff, and a bounded error category. They contain no
+credentials, raw errors, source rows, business keys or scope text. Rate and
+duration charts can be derived from these fields.
+
+Monitoring writes are required when this option is enabled: a write failure
+aborts extraction and leaves no successful reader evidence. If recording a
+failure also fails, the original extraction failure remains the error. A hard
+process termination can leave only a `started` event. An explicit iterator
+close produces `cancelled`; source initialization/schema errors before a
+snapshot read and unchanged-version skips produce no extraction event.
+
+Collect the files into a dedicated Delta table in a **separate scheduled Job**,
+so a failed ingestion does not prevent collection:
+
+```python
+from databricks.labs.community_connector.sources.crm_analytics.crm_analytics_monitoring import (
+    collect_monitoring_events,
+)
+
+collect_monitoring_events(
+    spark,
+    monitoring_volume_path="/Volumes/main/crm_analytics/monitoring/events",
+    monitoring_table="main.crm_analytics.connector_events",
+    checkpoint_path="/Volumes/main/crm_analytics/monitoring/collector_checkpoint",
+)
+```
+
+The collector uses Auto Loader with an explicit schema and validates the event
+contract. Malformed events fail collection rather than being silently dropped.
+It runs with `availableNow` and waits for completion. Its identity needs
+`READ VOLUME` on events, `READ VOLUME` and `WRITE VOLUME` on its checkpoint,
+catalog/schema usage, and the target-table creation/write grants. Event and
+checkpoint directories must be disjoint. Keep the same collector table,
+checkpoint and event directory across runs; changing the target with an old
+checkpoint does not backfill files already processed. Configure a separate Job
+failure alert for the collector and plan event/table retention explicitly.
+
+Use the [dashboard and SQL alert queries](../../../../../../docs/crm-analytics-monitoring.sql)
+for latest attempt status, throughput, failures, authentication failures, old or
+missing source versions, stalled attempts, and final pipeline update state.
+Bind the supplied parameters for dashboard queries. For scheduled SQL alerts,
+replace the chosen query's parameters with reviewed literals and configure the
+schedule, threshold and notification destination. These files do not deploy a
+dashboard, create an alert, or send a notification.
+
+Read the **latest lifecycle event per attempt**: a deadline crossed during
+completion-event persistence can be followed by a failure event. `completed`
+means source extraction only, and `target_committed` is always `false`.
+Events are not a cross-storage publication ledger. Monitor the pipeline
+`event_log` for final update state, including pre-read failures and successful
+unchanged-version skips, and verify target state separately. Source publication
+age and last extraction time are not target freshness; separate retries are
+not additional target rows. UC renewal, Volume writes, collection and alert
+queries still require validation in the intended live environment.
 
 ### Explicit schema evolution policy
 
@@ -506,6 +635,7 @@ Set these directly under each `table` object in the pipeline specification:
 | `schema_evolution_mode` | No | Requires a baseline. `strict` (default with baseline) requires unchanged fields; `additive` also accepts nullable physical additions. Target schema support still requires runtime validation. |
 | `key_validation_mode` | No | `memory` (default) or `sqlite` for exact business-key validation. Generated version/row keys always use a counter. |
 | `key_validation_cache_kib` | No | SQLite page-cache budget, 64–65,536 KiB; default 8,192. Does not bound HTTP response or total process memory. |
+| `monitoring_volume_path` | No | Disabled when omitted. Literal `/Volumes/catalog/schema/volume[/directory]` for metadata-only attempt events. Requires runtime Volume-write support and grants; monitoring write failure aborts extraction. Does not change source identity or checkpoints. |
 | `max_keys` | No | Maximum full-snapshot validation capacity: 1–10,000,000; default 1,000,000. Applies in memory, SQLite and generated modes. Exceeding it fails; it never truncates a snapshot. Size memory or local disk appropriately. |
 | `max_query_requests` | No | Per-read SAQL HTTP-attempt allowance: 1–100,000; default 2,000. Includes retries, both counts and the terminal empty page. Does not count metadata GETs. |
 | `max_read_seconds` | No | Per-read monotonic elapsed-time budget: 1–86,400 seconds; default 1,800. Includes metadata fetched during the read, retry waits and caller delays. Exceeding it aborts the snapshot. |
@@ -663,7 +793,9 @@ checks as proof of cross-system publication atomicity. See
 | Symptom | Action |
 | --- | --- |
 | OAuth callback rejection | Compare the complete requested callback with the app registration. Validate UI and local CLI paths independently; do not assume wildcard or dynamic-port support. |
-| HTTP 401 | Renew or reauthorize through the connection/test token provider, then retry the complete snapshot. The source reader does not refresh credentials. |
+| HTTP 401 | Run `ensure_connection` to request one fresh UC-backed retry. If authentication still fails, the existing connection owner must reauthorize as the same Salesforce integration user and check refresh-token policy/scopes. A mid-read failure requires a full pinned-snapshot retry in a new update. |
+| Monitoring write failure | Check runtime support, the literal Volume path and execution identity's Volume-write grants. Extraction fails when enabled monitoring cannot persist its events; preserve business targets/checkpoints. |
+| Collector failed or monitoring appears stale | Check the separate collector Job, read/write/table grants, malformed-event error and stable checkpoint/table mapping. Unchanged-version skips and pre-read failures have no extraction events; inspect final pipeline update state. |
 | HTTP 403 or a missing dataset/version | Verify the integration identity, permissions, dataset type, and explicit IDs. Do not fall back to another dataset or current version. |
 | Count mismatch, short page, warnings, or metadata drift | Abort and investigate visibility, source changes, unsupported fields, and version availability. Do not publish the rows already read. |
 | Duplicate/null key | Correct the business-key definition at the dataset's actual grain. Do not deduplicate, drop nulls, or invent a row hash to pass validation. |

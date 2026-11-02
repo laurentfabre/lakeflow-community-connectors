@@ -117,12 +117,58 @@ def connection_checks(connection_metadata: dict | None, table_options: dict | No
                     name,
                     "warning",
                     "Stored expiration has passed",
-                    "Check connection renewal; the source probe determines whether the injected token works",
+                    (
+                        "Ask the connection owner to check refresh-token policy and reauthorize "
+                        "before the next expiry; the source probe determines current access"
+                        if name == "refresh_token_expiration"
+                        else "Start a fresh UC-backed read to request runtime "
+                        "credential injection; the source probe determines current access"
+                    ),
+                )
+            )
+        elif (expiry - now).total_seconds() <= 300:
+            checks.append(
+                _report_check(
+                    name,
+                    "warning",
+                    "Stored expiration is within five minutes",
+                    (
+                        "Ask the connection owner to renew authorization before refresh-token expiry"
+                        if name == "refresh_token_expiration"
+                        else "UC owns token renewal; run ensure_connection before ingestion "
+                        "and allow a fresh read on authentication failure"
+                    ),
                 )
             )
         else:
             checks.append(_report_check(name, "ok", "Stored expiration is in the future"))
     return checks
+
+
+def oauth_lifecycle_report(connection_metadata, *, source_access_verified=False):
+    """Return lifecycle states only; never expose timestamps or credentials."""
+    metadata = connection_metadata or {}
+    options = metadata.get("options", metadata)
+    options = {str(k).lower(): v for k, v in options.items()} if isinstance(options, dict) else {}
+    now = datetime.now(timezone.utc)
+    states = {}
+    for name in ("access_token_expiration", "refresh_token_expiration"):
+        expiry = _parse_expiration(options.get(name))
+        states[name] = (
+            "unknown"
+            if expiry is None
+            else (
+                "expired"
+                if expiry <= now
+                else "expiring_soon" if (expiry - now).total_seconds() <= 300 else "future"
+            )
+        )
+    return {
+        "managed_by": "unity_catalog",
+        "source_access_verified": source_access_verified,
+        "expiration_metadata_advisory": True,
+        **states,
+    }
 
 
 def inspect_dataset(source, dataset_id: str, *, column_name_mode: str = "readable") -> dict:
@@ -203,7 +249,10 @@ def inspect_dataset(source, dataset_id: str, *, column_name_mode: str = "readabl
             for item in matches:
                 item.update(
                     supported=False,
-                    reason="Case-insensitive destination collision; rename the source or inspect using legacy_hex",
+                    reason=(
+                        "Case-insensitive destination collision; rename the source "
+                        "or inspect using legacy_hex"
+                    ),
                 )
     return {
         "format_version": 1,
@@ -250,12 +299,14 @@ def preflight(
         "kind": "crm_analytics_preflight",
         "checks": checks,
         "snapshot_completed": False,
+        "oauth_lifecycle": oauth_lifecycle_report(connection_metadata),
     }
     try:
         if dataset_id is None:
             names = source.list_tables()
             report["datasets"] = names
             checks.append(_report_check("source_access", "ok", "Dataset discovery succeeded"))
+            report["oauth_lifecycle"]["source_access_verified"] = True
         else:
             normalized = source._table_options(settings)
             # Report incompatible baselines instead of rejecting before a report can be built.
@@ -270,6 +321,7 @@ def preflight(
                     "source_access", "ok", "Dataset and pinned version metadata are accessible"
                 )
             )
+            report["oauth_lifecycle"]["source_access_verified"] = True
             plan = extraction_plan(descriptor, normalized, source._page_size)
             report.update(
                 dataset_id=dataset_id,
@@ -310,7 +362,8 @@ def preflight(
                         "schema_evolution",
                         "warning",
                         "No approved schema baseline is configured",
-                        "Review and save the candidate schema_baseline before enabling a schema policy",
+                        "Review and save the candidate schema_baseline "
+                        "before enabling a schema policy",
                     )
                 )
             if check_count:
@@ -324,15 +377,26 @@ def preflight(
                     _report_check(
                         "visible_count",
                         "ok",
-                        "Visible count matches pinned metadata; this does not independently establish full visibility",
+                        "Visible count matches pinned metadata; "
+                        "this does not independently establish full visibility",
                     )
                 )
     except CrmAnalyticsError as error:
         actions = {
-            "AUTHENTICATION": "Reauthorize the existing UC connection as the same Salesforce integration user; do not put tokens in pipeline settings",
-            "PERMISSION_DENIED": "Check CRM Analytics licensing, app access and dataset/folder permissions for the integration user",
-            "RESOURCE_NOT_FOUND": "Check the dataset/version ID and its visibility to the integration user",
-            "RATE_LIMITED": "Retry later and review Salesforce query quotas and extraction schedules",
+            "AUTHENTICATION": (
+                "Reauthorize the existing UC connection as the same Salesforce integration user; "
+                "do not put tokens in pipeline settings"
+            ),
+            "PERMISSION_DENIED": (
+                "Check CRM Analytics licensing, app access and dataset/folder permissions "
+                "for the integration user"
+            ),
+            "RESOURCE_NOT_FOUND": (
+                "Check the dataset/version ID and its visibility to the integration user"
+            ),
+            "RATE_LIMITED": (
+                "Retry later and review Salesforce query quotas and extraction schedules"
+            ),
         }
         code = error.code
         checks.append(
@@ -369,11 +433,15 @@ def diagnostic_report(source, options: dict) -> dict:
         if not dataset_id:
             raise CrmAnalyticsError("diagnostic_dataset_id is required for field inspection")
         try:
-            return inspect_dataset(
+            result = inspect_dataset(
                 source,
                 dataset_id,
                 column_name_mode=table_options.get("column_name_mode", "readable"),
             )
+            result["oauth_lifecycle"] = oauth_lifecycle_report(
+                source.options, source_access_verified=True
+            )
+            return result
         except CrmAnalyticsError as error:
             return {
                 "format_version": 1,
@@ -381,6 +449,7 @@ def diagnostic_report(source, options: dict) -> dict:
                 "ready": False,
                 "code": error.code,
                 "message": str(error),
+                "oauth_lifecycle": oauth_lifecycle_report(source.options),
             }
     if action == "discover":
         dataset_id, table_options = None, {}

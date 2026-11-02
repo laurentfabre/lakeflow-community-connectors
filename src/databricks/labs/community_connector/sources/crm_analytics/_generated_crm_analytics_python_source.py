@@ -24,6 +24,7 @@ from pyspark.sql.datasource import (
     InputPartition,
     SimpleDataSourceStreamReader,
 )
+from pyspark.sql.functions import expr
 from pyspark.sql.streaming.datasource import ReadAllAvailable, SupportsTriggerAvailableNow
 from pyspark.sql.types import (
     ArrayType,
@@ -52,6 +53,7 @@ import random
 import requests
 import sqlite3
 import tempfile
+import uuid
 
 
 def register_lakeflow_source(spark):
@@ -778,42 +780,363 @@ def register_lakeflow_source(spark):
             self.max_query_requests = options["max_query_requests"]
             self.max_read_seconds = options["max_read_seconds"]
             self.query_requests = 0
+            self.http_requests = 0
+            self.retry_count = 0
+            self.retry_wait_seconds = 0.0
 
         def remaining(self) -> float:
             remaining = self.max_read_seconds - (time.monotonic() - self.started_at)
             if remaining <= 0:
-                raise CrmAnalyticsError("Snapshot exceeded max_read_seconds; entire snapshot aborted")
+                raise CrmAnalyticsError(
+                    "Snapshot exceeded max_read_seconds; entire snapshot aborted", code="READ_DEADLINE"
+                )
             return remaining
 
-        def request_timeout(self, configured: float, *, query: bool) -> tuple[float, float]:
+        def request_timeout(
+            self, configured: float, *, query: bool, retry: bool = False
+        ) -> tuple[float, float]:
             timeout = min(configured, self.remaining())
             if query:
                 self.ensure_query_available()
                 self.query_requests += 1
+            self.http_requests += 1
+            self.retry_count += int(retry)
             return timeout, timeout
 
         def ensure_query_available(self) -> None:
             if self.query_requests >= self.max_query_requests:
-                raise CrmAnalyticsError("Snapshot exceeded max_query_requests; entire snapshot aborted")
+                raise CrmAnalyticsError(
+                    "Snapshot exceeded max_query_requests; entire snapshot aborted", code="QUERY_BUDGET"
+                )
 
         def sleep(self, delay: float, *, query: bool = False) -> None:
             if query:
                 self.ensure_query_available()
             if delay >= self.remaining():
                 raise CrmAnalyticsError(
-                    "Retry delay would exhaust max_read_seconds; entire snapshot aborted"
+                    "Retry delay would exhaust max_read_seconds; entire snapshot aborted",
+                    code="READ_DEADLINE",
                 )
-            time.sleep(delay)
+            started = time.monotonic()
+            try:
+                time.sleep(delay)
+            finally:
+                self.retry_wait_seconds += max(0.0, time.monotonic() - started)
             self.remaining()
 
         def metrics(self) -> dict:
             remaining = self.remaining()
             return {
                 "query_requests": self.query_requests,
+                "http_requests": self.http_requests,
+                "retry_count": self.retry_count,
+                "retry_wait_seconds": self.retry_wait_seconds,
                 "elapsed_seconds": self.max_read_seconds - remaining,
                 "max_query_requests": self.max_query_requests,
                 "max_read_seconds": self.max_read_seconds,
             }
+
+
+    ########################################################
+    # src/databricks/labs/community_connector/sources/crm_analytics/crm_analytics_monitoring.py
+    ########################################################
+
+    MONITORING_STATUSES = frozenset({"started", "completed", "failed", "cancelled"})
+    MONITORING_SCHEMA_DDL = """
+    format_version BIGINT, event_id STRING, attempt_id STRING, status STRING,
+    event_time TIMESTAMP, started_at TIMESTAMP, dataset_id STRING, version_id STRING,
+    source_created_at TIMESTAMP, source_age_seconds DOUBLE, elapsed_seconds DOUBLE,
+    expected_row_count BIGINT, extracted_row_count BIGINT, page_queries BIGINT,
+    data_pages BIGINT, peak_page_rows BIGINT, http_requests BIGINT, query_requests BIGINT,
+    retry_count BIGINT, retry_wait_seconds DOUBLE, error_code STRING, target_committed BOOLEAN
+    """
+    _MONITORING_CODES = frozenset(
+        {
+            "AUTHENTICATION",
+            "PERMISSION_DENIED",
+            "RESOURCE_NOT_FOUND",
+            "RATE_LIMITED",
+            "SOURCE_HTTP_ERROR",
+            "SOURCE_UNAVAILABLE",
+            "CONNECTOR_ERROR",
+            "READ_DEADLINE",
+            "QUERY_BUDGET",
+            "MONITORING_WRITE_FAILED",
+            "CANCELLED",
+            "INTERNAL_ERROR",
+        }
+    )
+    _VOLUME_SEGMENT = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}\Z")
+    _MONITORING_ID = re.compile(r"[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?\Z")
+
+
+    def validate_monitoring_path(value, *, option_name="monitoring_volume_path") -> str:
+        """Accept only a literal UC Volume path with simple, non-traversing parts."""
+        if not isinstance(value, str) or not value.startswith("/Volumes/"):
+            raise CrmAnalyticsError(
+                f"{option_name} must be a literal /Volumes/catalog/schema/volume path"
+            )
+        parts = value.removesuffix("/").split("/")
+        if len(parts) < 5 or any(not _VOLUME_SEGMENT.fullmatch(p) for p in parts[2:]):
+            raise CrmAnalyticsError(f"{option_name} contains an unsupported or unsafe Volume path")
+        return "/".join(parts)
+
+
+    def monitoring_schema() -> StructType:
+        """Explicit event schema, usable without an active Spark session."""
+        fields = []
+        for item in MONITORING_SCHEMA_DDL.strip().split(","):
+            name, kind = item.strip().split()
+            fields.append(
+                {
+                    "name": name,
+                    "type": {
+                        "BIGINT": "long",
+                        "STRING": "string",
+                        "TIMESTAMP": "timestamp",
+                        "DOUBLE": "double",
+                        "BOOLEAN": "boolean",
+                    }[kind],
+                    "nullable": True,
+                    "metadata": {},
+                }
+            )
+        return StructType.fromJson({"type": "struct", "fields": fields})
+
+
+    def collect_monitoring_events(
+        spark,
+        *,
+        monitoring_volume_path: str,
+        monitoring_table: str,
+        checkpoint_path: str,
+    ):
+        """Collect events with Auto Loader in a separate available-now job.
+
+        Keep the same dedicated checkpoint for repeated runs. JSON failures abort
+        collection rather than silently dropping events. Grant the job READ VOLUME
+        on events, READ/WRITE VOLUME on its checkpoint and writes to its Delta table.
+        """
+        events = validate_monitoring_path(monitoring_volume_path)
+        checkpoint = validate_monitoring_path(checkpoint_path, option_name="checkpoint_path")
+        # The source and checkpoint must be disjoint, including ancestor paths.
+        if (
+            events == checkpoint
+            or events.startswith(checkpoint + "/")
+            or checkpoint.startswith(events + "/")
+        ):
+            raise CrmAnalyticsError("Monitoring events and collector checkpoint paths must be disjoint")
+        if (
+            not isinstance(monitoring_table, str)
+            or len(monitoring_table.split(".")) != 3
+            or any(
+                not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,254}", part)
+                for part in monitoring_table.split(".")
+            )
+        ):
+            raise CrmAnalyticsError(
+                "monitoring_table must be a three-part catalog.schema.table identifier"
+            )
+        quoted_table = ".".join("`" + part + "`" for part in monitoring_table.split("."))
+        events_frame = (
+            spark.readStream.format("cloudFiles")
+            .option("cloudFiles.format", "json")
+            .option("cloudFiles.includeExistingFiles", "true")
+            .option("cloudFiles.schemaEvolutionMode", "none")
+            .option("rescuedDataColumn", "_rescued_data")
+            .option("mode", "FAILFAST")
+            .schema(monitoring_schema().add("_rescued_data", "string"))
+            .load(events)
+        )
+        valid_event = """
+            _rescued_data IS NULL AND format_version = 1
+            AND event_id RLIKE '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
+            AND attempt_id RLIKE '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
+            AND status IN ('started', 'completed', 'failed', 'cancelled')
+            AND event_time IS NOT NULL AND started_at IS NOT NULL
+            AND event_time >= started_at AND target_committed = false
+            AND elapsed_seconds >= 0 AND extracted_row_count >= 0
+            AND page_queries >= 0 AND data_pages >= 0 AND peak_page_rows >= 0
+            AND http_requests >= 0 AND query_requests >= 0
+            AND retry_count >= 0 AND retry_wait_seconds >= 0
+            AND (expected_row_count IS NULL OR expected_row_count >= 0)
+            AND (source_age_seconds IS NULL OR source_age_seconds >= 0)
+            AND (dataset_id IS NULL OR dataset_id RLIKE '^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$')
+            AND (version_id IS NULL OR version_id RLIKE '^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$')
+            AND (status != 'completed' OR
+                 (dataset_id IS NOT NULL AND version_id IS NOT NULL
+                  AND source_created_at IS NOT NULL AND expected_row_count = extracted_row_count
+                  AND page_queries >= 1 AND data_pages = page_queries - 1))
+            AND ((status IN ('started', 'completed') AND error_code IS NULL)
+                 OR (status = 'cancelled' AND error_code = 'CANCELLED')
+                 OR (status = 'failed' AND error_code IN
+                      ('AUTHENTICATION', 'PERMISSION_DENIED', 'RESOURCE_NOT_FOUND', 'RATE_LIMITED',
+                       'SOURCE_HTTP_ERROR', 'SOURCE_UNAVAILABLE', 'CONNECTOR_ERROR', 'READ_DEADLINE',
+                       'QUERY_BUDGET', 'MONITORING_WRITE_FAILED', 'CANCELLED', 'INTERNAL_ERROR')))
+        """
+        query = (
+            events_frame.withColumn(
+                "event_id",
+                expr(
+                    "CASE WHEN " + valid_event + " THEN event_id "
+                    "ELSE raise_error('Invalid CRM Analytics monitoring event contract') END"
+                ),
+            )
+            .drop("_rescued_data")
+            .writeStream.format("delta")
+            .outputMode("append")
+            .option("checkpointLocation", checkpoint)
+            .trigger(availableNow=True)
+            .toTable(quoted_table)
+        )
+        query.awaitTermination()
+        return query
+
+
+    class _MonitoringAttempt:
+        """Per-iterator state; never store values or exceptions from source rows."""
+
+        def __init__(self, path, dataset_id, started_at):
+            self.path = validate_monitoring_path(path) if path is not None else None
+            self.attempt_id = str(uuid.uuid4())
+            self.started_at = started_at
+            self.started_time = datetime.now(timezone.utc).isoformat()
+            self.dataset_id = (
+                dataset_id
+                if isinstance(dataset_id, str) and _MONITORING_ID.fullmatch(dataset_id)
+                else None
+            )
+            self.descriptor = {}
+            self.budget = None
+            self.context_key = None
+            self.read_epoch = None
+            self.extracted_row_count = 0
+            self.page_queries = 0
+            self.data_pages = 0
+            self.peak_page_rows = 0
+            self.emit("started")
+
+        def emit(self, status, *, error=None):
+            if self.path is None:
+                return
+            if status not in MONITORING_STATUSES:
+                raise AssertionError("Unknown monitoring lifecycle status")
+            now = datetime.now(timezone.utc)
+            descriptor = self.descriptor
+            source_created_at = descriptor.get("source_created_at")
+            try:
+                published = datetime.fromisoformat(source_created_at.replace("Z", "+00:00"))
+                if published.tzinfo is None:
+                    raise ValueError
+                source_age = max(0.0, (now - published).total_seconds())
+            except (AttributeError, TypeError, ValueError):
+                source_created_at, source_age = None, None
+            budget = self.budget
+            code = getattr(error, "code", "INTERNAL_ERROR") if error is not None else None
+            if code is not None and code not in _MONITORING_CODES:
+                code = "CONNECTOR_ERROR"
+            event_id = str(uuid.uuid4())
+            event = {
+                "format_version": 1,
+                "event_id": event_id,
+                "attempt_id": self.attempt_id,
+                "status": status,
+                "event_time": now.isoformat(),
+                "started_at": self.started_time,
+                "dataset_id": self.dataset_id,
+                "version_id": descriptor.get("version_id"),
+                "source_created_at": source_created_at,
+                "source_age_seconds": source_age,
+                "elapsed_seconds": max(0.0, time.monotonic() - self.started_at),
+                "expected_row_count": descriptor.get("expected_row_count"),
+                "extracted_row_count": self.extracted_row_count,
+                "page_queries": self.page_queries,
+                "data_pages": self.data_pages,
+                "peak_page_rows": self.peak_page_rows,
+                "http_requests": budget.http_requests if budget else 0,
+                "query_requests": budget.query_requests if budget else 0,
+                "retry_count": budget.retry_count if budget else 0,
+                "retry_wait_seconds": budget.retry_wait_seconds if budget else 0.0,
+                "error_code": "CANCELLED" if status == "cancelled" else code,
+                "target_committed": False,
+            }
+            try:
+                os.makedirs(self.path, exist_ok=True)
+                # Volume storage does not guarantee atomic rename. Unique immutable
+                # files plus fail-fast parsing expose interrupted writes explicitly.
+                with open(os.path.join(self.path, event_id + ".json"), "x", encoding="utf-8") as handle:
+                    json.dump(event, handle, ensure_ascii=True, allow_nan=False)
+                    handle.write("\n")
+            except (OSError, TypeError, ValueError):
+                raise CrmAnalyticsError(
+                    "Could not persist CRM Analytics monitoring event; "
+                    "check Volume permissions and storage; snapshot aborted",
+                    code="MONITORING_WRITE_FAILED",
+                ) from None
+
+        def record_page(self, rows):
+            self.page_queries += 1
+            self.data_pages += int(bool(rows))
+            self.peak_page_rows = max(self.peak_page_rows, len(rows))
+
+        def record_failure(self, error):
+            try:
+                self.emit("failed", error=error)
+            except CrmAnalyticsError:
+                # The original source failure must remain the cause of the failed
+                # extraction. A monitoring write must never turn it into success.
+                pass
+
+
+    class _ObservedSnapshotIterator:
+        """Keep explicit close observable, even before the first generator next()."""
+
+        def __init__(self, iterator, attempt, invalidate):
+            self.iterator, self.attempt, self.invalidate = iterator, attempt, invalidate
+            self.finished = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self.finished:
+                raise StopIteration
+            try:
+                row = next(self.iterator)
+            except StopIteration:
+                try:
+                    if self.attempt.budget is not None:
+                        self.attempt.budget.remaining()
+                    self.attempt.emit("completed")
+                    if self.attempt.budget is not None:
+                        self.attempt.budget.remaining()
+                except BaseException as error:
+                    self.invalidate()
+                    self.attempt.record_failure(error)
+                    self.finished = True
+                    raise
+                self.finished = True
+                raise
+            except BaseException as error:
+                self.invalidate()
+                self.attempt.record_failure(error)
+                self.finished = True
+                raise
+            self.attempt.extracted_row_count += 1
+            return row
+
+        def close(self):
+            if self.finished:
+                return
+            self.invalidate()
+            try:
+                self.iterator.close()
+                self.attempt.emit("cancelled")
+            except BaseException as error:
+                self.attempt.record_failure(error)
+                raise
+            finally:
+                self.finished = True
 
 
     ########################################################
@@ -1229,12 +1552,58 @@ def register_lakeflow_source(spark):
                         name,
                         "warning",
                         "Stored expiration has passed",
-                        "Check connection renewal; the source probe determines whether the injected token works",
+                        (
+                            "Ask the connection owner to check refresh-token policy and reauthorize "
+                            "before the next expiry; the source probe determines current access"
+                            if name == "refresh_token_expiration"
+                            else "Start a fresh UC-backed read to request runtime "
+                            "credential injection; the source probe determines current access"
+                        ),
+                    )
+                )
+            elif (expiry - now).total_seconds() <= 300:
+                checks.append(
+                    _report_check(
+                        name,
+                        "warning",
+                        "Stored expiration is within five minutes",
+                        (
+                            "Ask the connection owner to renew authorization before refresh-token expiry"
+                            if name == "refresh_token_expiration"
+                            else "UC owns token renewal; run ensure_connection before ingestion "
+                            "and allow a fresh read on authentication failure"
+                        ),
                     )
                 )
             else:
                 checks.append(_report_check(name, "ok", "Stored expiration is in the future"))
         return checks
+
+
+    def oauth_lifecycle_report(connection_metadata, *, source_access_verified=False):
+        """Return lifecycle states only; never expose timestamps or credentials."""
+        metadata = connection_metadata or {}
+        options = metadata.get("options", metadata)
+        options = {str(k).lower(): v for k, v in options.items()} if isinstance(options, dict) else {}
+        now = datetime.now(timezone.utc)
+        states = {}
+        for name in ("access_token_expiration", "refresh_token_expiration"):
+            expiry = _parse_expiration(options.get(name))
+            states[name] = (
+                "unknown"
+                if expiry is None
+                else (
+                    "expired"
+                    if expiry <= now
+                    else "expiring_soon" if (expiry - now).total_seconds() <= 300 else "future"
+                )
+            )
+        return {
+            "managed_by": "unity_catalog",
+            "source_access_verified": source_access_verified,
+            "expiration_metadata_advisory": True,
+            **states,
+        }
 
 
     def inspect_dataset(source, dataset_id: str, *, column_name_mode: str = "readable") -> dict:
@@ -1315,7 +1684,10 @@ def register_lakeflow_source(spark):
                 for item in matches:
                     item.update(
                         supported=False,
-                        reason="Case-insensitive destination collision; rename the source or inspect using legacy_hex",
+                        reason=(
+                            "Case-insensitive destination collision; rename the source "
+                            "or inspect using legacy_hex"
+                        ),
                     )
         return {
             "format_version": 1,
@@ -1362,12 +1734,14 @@ def register_lakeflow_source(spark):
             "kind": "crm_analytics_preflight",
             "checks": checks,
             "snapshot_completed": False,
+            "oauth_lifecycle": oauth_lifecycle_report(connection_metadata),
         }
         try:
             if dataset_id is None:
                 names = source.list_tables()
                 report["datasets"] = names
                 checks.append(_report_check("source_access", "ok", "Dataset discovery succeeded"))
+                report["oauth_lifecycle"]["source_access_verified"] = True
             else:
                 normalized = source._table_options(settings)
                 # Report incompatible baselines instead of rejecting before a report can be built.
@@ -1382,6 +1756,7 @@ def register_lakeflow_source(spark):
                         "source_access", "ok", "Dataset and pinned version metadata are accessible"
                     )
                 )
+                report["oauth_lifecycle"]["source_access_verified"] = True
                 plan = extraction_plan(descriptor, normalized, source._page_size)
                 report.update(
                     dataset_id=dataset_id,
@@ -1422,7 +1797,8 @@ def register_lakeflow_source(spark):
                             "schema_evolution",
                             "warning",
                             "No approved schema baseline is configured",
-                            "Review and save the candidate schema_baseline before enabling a schema policy",
+                            "Review and save the candidate schema_baseline "
+                            "before enabling a schema policy",
                         )
                     )
                 if check_count:
@@ -1436,15 +1812,26 @@ def register_lakeflow_source(spark):
                         _report_check(
                             "visible_count",
                             "ok",
-                            "Visible count matches pinned metadata; this does not independently establish full visibility",
+                            "Visible count matches pinned metadata; "
+                            "this does not independently establish full visibility",
                         )
                     )
         except CrmAnalyticsError as error:
             actions = {
-                "AUTHENTICATION": "Reauthorize the existing UC connection as the same Salesforce integration user; do not put tokens in pipeline settings",
-                "PERMISSION_DENIED": "Check CRM Analytics licensing, app access and dataset/folder permissions for the integration user",
-                "RESOURCE_NOT_FOUND": "Check the dataset/version ID and its visibility to the integration user",
-                "RATE_LIMITED": "Retry later and review Salesforce query quotas and extraction schedules",
+                "AUTHENTICATION": (
+                    "Reauthorize the existing UC connection as the same Salesforce integration user; "
+                    "do not put tokens in pipeline settings"
+                ),
+                "PERMISSION_DENIED": (
+                    "Check CRM Analytics licensing, app access and dataset/folder permissions "
+                    "for the integration user"
+                ),
+                "RESOURCE_NOT_FOUND": (
+                    "Check the dataset/version ID and its visibility to the integration user"
+                ),
+                "RATE_LIMITED": (
+                    "Retry later and review Salesforce query quotas and extraction schedules"
+                ),
             }
             code = error.code
             checks.append(
@@ -1481,11 +1868,15 @@ def register_lakeflow_source(spark):
             if not dataset_id:
                 raise CrmAnalyticsError("diagnostic_dataset_id is required for field inspection")
             try:
-                return inspect_dataset(
+                result = inspect_dataset(
                     source,
                     dataset_id,
                     column_name_mode=table_options.get("column_name_mode", "readable"),
                 )
+                result["oauth_lifecycle"] = oauth_lifecycle_report(
+                    source.options, source_access_verified=True
+                )
+                return result
             except CrmAnalyticsError as error:
                 return {
                     "format_version": 1,
@@ -1493,6 +1884,7 @@ def register_lakeflow_source(spark):
                     "ready": False,
                     "code": error.code,
                     "message": str(error),
+                    "oauth_lifecycle": oauth_lifecycle_report(source.options),
                 }
         if action == "discover":
             dataset_id, table_options = None, {}
@@ -1517,20 +1909,25 @@ def register_lakeflow_source(spark):
         dataset_id: str | None = None,
         table_options: dict | None = None,
         check_count: bool = False,
+        retry_authentication: bool = True,
     ) -> dict:
-        """Read one metadata report through runtime UC token injection.
+        """Read a metadata report, with at most one fresh UC read after HTTP 401.
 
         ``discover`` lists dataset IDs; ``inspect`` previews physical fields;
         ``health`` checks options, metadata, schema policy and extraction capacity.
         ``check_count=True`` additionally executes one count query, never row samples.
         Metadata access does not prove source row visibility or a complete snapshot.
+        A second Spark read requests credential injection from UC. It does not
+        exchange tokens itself or guarantee that UC can renew revoked credentials.
         """
         if not isinstance(connection_name, str) or not connection_name.strip():
             raise CrmAnalyticsError("A nonempty UC connection name is required")
         if action not in ("health", "discover", "inspect"):
             raise CrmAnalyticsError("action must be health, discover, or inspect")
-        if type(check_count) is not bool:
+        if not isinstance(check_count, bool):
             raise CrmAnalyticsError("check_count must be a boolean")
+        if not isinstance(retry_authentication, bool):
+            raise CrmAnalyticsError("retry_authentication must be a boolean")
         if table_options is not None and not isinstance(table_options, dict):
             raise CrmAnalyticsError("table_options must be an object")
         options = {
@@ -1540,6 +1937,35 @@ def register_lakeflow_source(spark):
         }
         if dataset_id is not None:
             options["diagnostic_dataset_id"] = dataset_id
+        previous_authentication_failure = False
+        for attempt in range(2 if retry_authentication else 1):
+            result = _diagnostic_read(spark, connection_name, options)
+            authentication_failure = result.get("code") == "AUTHENTICATION" or any(
+                check.get("name") == "AUTHENTICATION" and check.get("status") == "error"
+                for check in result.get("checks", [])
+                if isinstance(check, dict)
+            )
+            lifecycle = dict(result.get("oauth_lifecycle", {}))
+            verified = lifecycle.get("source_access_verified", False)
+            lifecycle.update(
+                managed_by="unity_catalog",
+                fresh_read_attempts=attempt + 1,
+                credential_reinjections=attempt,
+                recovered=bool(
+                    previous_authentication_failure and verified and not authentication_failure
+                ),
+                reauthorization_required=bool(
+                    previous_authentication_failure and authentication_failure
+                ),
+            )
+            result["oauth_lifecycle"] = lifecycle
+            if not authentication_failure or attempt or not retry_authentication:
+                return result
+            previous_authentication_failure = True
+        raise AssertionError("unreachable")
+
+
+    def _diagnostic_read(spark, connection_name, options):
         try:
             rows = (
                 spark.read.format("lakeflow_connect")
@@ -1562,7 +1988,10 @@ def register_lakeflow_source(spark):
                         "name": "uc_execution",
                         "status": "error",
                         "message": "The UC-backed diagnostic read could not execute",
-                        "action": "Verify the updated reader is registered, diagnostics options are allowlisted, USE CONNECTION is granted, and Salesforce authorization is valid",
+                        "action": (
+                            "Verify the updated reader is registered, diagnostics options are "
+                            "allowlisted, USE CONNECTION is granted, and Salesforce authorization is valid"
+                        ),
                     }
                 ],
             }
@@ -1572,9 +2001,56 @@ def register_lakeflow_source(spark):
             result = json.loads(rows[0]["report"])
             if not isinstance(result, dict) or result.get("format_version") != 1:
                 raise ValueError
+            if "checks" in result and (
+                not isinstance(result["checks"], list)
+                or any(not isinstance(check, dict) for check in result["checks"])
+            ):
+                raise ValueError
+            if "oauth_lifecycle" in result and not isinstance(result["oauth_lifecycle"], dict):
+                raise ValueError
             return result
         except (ValueError, TypeError, KeyError):
             raise CrmAnalyticsError("Malformed connector diagnostic report") from None
+
+
+    def ensure_connection(
+        spark,
+        *,
+        connection_name: str,
+        dataset_id: str | None = None,
+        table_options: dict | None = None,
+        check_count: bool = False,
+    ) -> dict:
+        """Pre-ingestion gate using metadata only, or an optional count query.
+
+        A persistent 401 requires the existing connection's owner to reauthorize
+        using the same Salesforce integration user. No target/checkpoint changes or
+        source rows are written or downloaded by this helper.
+        """
+        report = run_diagnostics(
+            spark,
+            connection_name=connection_name,
+            action="health",
+            dataset_id=dataset_id,
+            table_options=table_options,
+            check_count=check_count,
+            retry_authentication=True,
+        )
+        if report.get("ready") is True:
+            return report
+        if report.get("oauth_lifecycle", {}).get("reauthorization_required"):
+            raise CrmAnalyticsError(
+                "Salesforce authentication still fails after a fresh UC-backed read. The owner must "
+                "reauthorize the existing connection as the same Salesforce integration user; verify "
+                "api and refresh_token scopes and the Salesforce refresh-token policy, then retry. "
+                "Keep tokens out of pipeline settings and preserve existing tables/checkpoints",
+                code="AUTHENTICATION",
+            )
+        raise CrmAnalyticsError(
+            "CRM Analytics preflight failed; review run_diagnostics checks for connection permissions, "
+            "configuration, schema or capacity before starting ingestion",
+            code="PREFLIGHT_FAILED",
+        )
 
 
     def validate_pipeline(spark, pipeline_spec: dict, *, check_count: bool = False) -> dict:
@@ -1773,7 +2249,9 @@ def register_lakeflow_source(spark):
                     session.cookies.clear()
                     timeout = (
                         budget.request_timeout(
-                            self._timeout, query=method == "POST" and path == self._base + "/query"
+                            self._timeout,
+                            query=method == "POST" and path == self._base + "/query",
+                            retry=attempt > 0,
                         )
                         if budget is not None
                         else (self._timeout, self._timeout)
@@ -1802,7 +2280,11 @@ def register_lakeflow_source(spark):
                     status = response.status_code
                     if status == 401:
                         raise CrmAnalyticsError(
-                            "CRM Analytics authentication expired or invalid; renew the injected token externally",
+                            "CRM Analytics authentication expired or invalid; start a fresh UC-backed read "
+                            "to request credential renewal. If HTTP 401 persists, the connection owner must "
+                            "reauthorize the existing UC connection as the same Salesforce integration user. "
+                            "Do not copy tokens into pipeline settings; "
+                            "retry the complete pinned snapshot",
                             code="AUTHENTICATION",
                         )
                     if status not in _RETRY_STATUSES:
@@ -1902,6 +2384,41 @@ def register_lakeflow_source(spark):
                 path, params = self._next_link(next_url), None
 
         @staticmethod
+        def _validate_destination_keys(options, keys, mode, auto_column):
+            # A shared pipeline override must match the source's destination keys.
+            if "primary_keys" not in options:
+                return
+            destination_keys = options.pop("primary_keys")
+            if isinstance(destination_keys, str):
+                try:
+                    destination_keys = json.loads(destination_keys)
+                except ValueError:
+                    raise CrmAnalyticsError(
+                        "primary_keys override must contain mapped destination names"
+                    ) from None
+            expected_keys = (
+                [_GENERATED_VERSION_COLUMN, auto_column]
+                if auto_column
+                else [encode_column_name(_field_name(k), mode) for k in keys]
+            )
+            if destination_keys != expected_keys:
+                raise CrmAnalyticsError(
+                    "primary_keys override does not match generated version/row keys"
+                    if auto_column
+                    else "primary_keys override does not match mapped source_primary_keys"
+                )
+
+        @staticmethod
+        def _normalize_schema_policy(options):
+            if "schema_evolution_mode" in options and "schema_baseline" not in options:
+                raise CrmAnalyticsError("schema_evolution_mode requires an approved schema_baseline")
+            if "schema_baseline" in options:
+                options["schema_baseline"] = validate_schema_baseline(options["schema_baseline"])
+                options.setdefault("schema_evolution_mode", "strict")
+                if options["schema_evolution_mode"] not in ("strict", "additive"):
+                    raise CrmAnalyticsError("schema_evolution_mode must be strict or additive")
+
+        @staticmethod
         def _table_options(table_options: dict[str, str]) -> dict:
             # Spark passes connection and framework options to schema()/read_table()
             # together with table options. Normalize casing (CaseInsensitiveDict)
@@ -1964,6 +2481,7 @@ def register_lakeflow_source(spark):
                 "schema_evolution_mode",
                 "key_validation_mode",
                 "key_validation_cache_kib",
+                "monitoring_volume_path",
             }
             unknown = set(options) - allowed
             if unknown:
@@ -1971,13 +2489,11 @@ def register_lakeflow_source(spark):
                 raise CrmAnalyticsError(
                     f"Unknown table option(s): {names}; filters and row caps are not supported"
                 )
-            if "schema_evolution_mode" in options and "schema_baseline" not in options:
-                raise CrmAnalyticsError("schema_evolution_mode requires an approved schema_baseline")
-            if "schema_baseline" in options:
-                options["schema_baseline"] = validate_schema_baseline(options["schema_baseline"])
-                options.setdefault("schema_evolution_mode", "strict")
-                if options["schema_evolution_mode"] not in ("strict", "additive"):
-                    raise CrmAnalyticsError("schema_evolution_mode must be strict or additive")
+            if "monitoring_volume_path" in options:
+                options["monitoring_volume_path"] = validate_monitoring_path(
+                    options["monitoring_volume_path"]
+                )
+            CrmAnalyticsLakeflowConnect._normalize_schema_policy(options)
             expected = options.get("expected_snapshot_fingerprint")
             if expected is not None and (
                 not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected)
@@ -2017,28 +2533,7 @@ def register_lakeflow_source(spark):
                     raise CrmAnalyticsError(
                         "selected_columns must include every source_primary_keys field"
                     )
-            # primary_keys is a shared pipeline destination override. If present,
-            # accept only this naming mode's counterpart, preventing a wrong merge key.
-            if "primary_keys" in options:
-                destination_keys = options.pop("primary_keys")
-                if isinstance(destination_keys, str):
-                    try:
-                        destination_keys = json.loads(destination_keys)
-                    except ValueError:
-                        raise CrmAnalyticsError(
-                            "primary_keys override must contain mapped destination names"
-                        ) from None
-                expected_keys = (
-                    [_GENERATED_VERSION_COLUMN, auto_column]
-                    if auto_column
-                    else [encode_column_name(_field_name(k), mode) for k in keys]
-                )
-                if destination_keys != expected_keys:
-                    raise CrmAnalyticsError(
-                        "primary_keys override does not match generated version/row keys"
-                        if auto_column
-                        else "primary_keys override does not match mapped source_primary_keys"
-                    )
+            CrmAnalyticsLakeflowConnect._validate_destination_keys(options, keys, mode, auto_column)
             precision = _integer(options.get("decimal_precision", "38"), "decimal_precision", 1, 38)
             options["decimal_precision"] = precision
             options["decimal_scale"] = _integer(
@@ -2268,6 +2763,7 @@ def register_lakeflow_source(spark):
             # Each read gets fresh limits rather than inheriting a cached allowance.
             options.pop("max_query_requests")
             options.pop("max_read_seconds")
+            options.pop("monitoring_volume_path", None)
             expected_fingerprint = options.pop("expected_snapshot_fingerprint", None)
             key = _fingerprint([name, options])
             if key not in self._contexts:
@@ -2575,27 +3071,62 @@ def register_lakeflow_source(spark):
         def read_table(
             self, table_name: str, start_offset: dict | None, table_options: dict[str, str]
         ) -> tuple[Iterator[dict], None]:
+            raw = {str(k).lower(): v for k, v in (table_options or {}).items()}
+            if table_name == DIAGNOSTICS_TABLE or raw.get("monitoring_volume_path") is None:
+                return self._read_snapshot_table(table_name, start_offset, table_options)
             started_at = time.monotonic()
-            if start_offset is not None and start_offset != {}:
-                raise CrmAnalyticsError("Snapshot reads do not accept incremental offsets")
-            if table_name == DIAGNOSTICS_TABLE:
+            # Even a failed started-event write invalidates old success evidence.
+            # Derive only the exact cache key; no metadata requests before the event.
+            try:
+                identity_options = self._table_options(table_options)
+                for control in (
+                    "max_query_requests",
+                    "max_read_seconds",
+                    "monitoring_volume_path",
+                    "expected_snapshot_fingerprint",
+                ):
+                    identity_options.pop(control, None)
+                self._evidence.pop(_fingerprint([table_name, identity_options]), None)
+            except CrmAnalyticsError:
+                pass  # Record other configuration failures after a started event.
+            attempt = _MonitoringAttempt(raw.get("monitoring_volume_path"), table_name, started_at)
 
-                def report_rows():
-                    yield {
-                        "report": json.dumps(diagnostic_report(self, table_options), ensure_ascii=True)
-                    }
+            def invalidate():
+                key = attempt.context_key
+                if key is not None and self._read_epochs.get(key) == attempt.read_epoch:
+                    self._evidence.pop(key, None)
 
-                return report_rows(), None
+            try:
+                rows, _ = self._read_snapshot_table(
+                    table_name, start_offset, table_options, monitor=attempt
+                )
+            except BaseException as error:
+                attempt.record_failure(error)
+                raise
+            return _ObservedSnapshotIterator(rows, attempt, invalidate), None
+
+        def _prepare_snapshot_read(self, table_name, table_options, started_at, monitor):
+            """Create per-read budget and epoch without changing the pinned identity."""
             budget = _ReadBudget(started_at, self._table_options(table_options))
+            if monitor is not None:
+                # Include monitoring startup time in the same overall deadline.
+                budget.started_at = monitor.started_at
+                monitor.budget = budget
             key, context = self._context(table_name, table_options, budget=budget)
             self._evidence.pop(key, None)
             epoch = self._read_epochs.get(key, 0) + 1
             self._read_epochs[key] = epoch
+            if monitor is not None:
+                monitor.context_key, monitor.read_epoch = key, epoch
             budget.remaining()
             descriptor, options = context["descriptor"], context["options"]
-            name, version_id = descriptor["dataset_id"], descriptor["version_id"]
-            expected = descriptor["expected_row_count"]
-            if expected > options["max_keys"]:
+            if monitor is not None:
+                monitor.descriptor = descriptor
+            return budget, key, context, epoch
+
+        def _minimum_snapshot_queries(self, descriptor, options, budget):
+            """Reject impossible full-read capacities before the first SAQL query."""
+            if descriptor["expected_row_count"] > options["max_keys"]:
                 raise CrmAnalyticsError(
                     "Snapshot exceeds configured max_keys validation capacity; increase explicitly"
                 )
@@ -2611,6 +3142,34 @@ def register_lakeflow_source(spark):
                 raise CrmAnalyticsError(
                     "Snapshot requires more than max_query_requests; increase explicitly"
                 )
+            return minimum_queries
+
+        def _read_snapshot_table(
+            self,
+            table_name: str,
+            start_offset: dict | None,
+            table_options: dict[str, str],
+            *,
+            monitor=None,
+        ) -> tuple[Iterator[dict], None]:
+            started_at = time.monotonic()
+            if start_offset is not None and start_offset != {}:
+                raise CrmAnalyticsError("Snapshot reads do not accept incremental offsets")
+            if table_name == DIAGNOSTICS_TABLE:
+
+                def report_rows():
+                    yield {
+                        "report": json.dumps(diagnostic_report(self, table_options), ensure_ascii=True)
+                    }
+
+                return report_rows(), None
+            budget, key, context, epoch = self._prepare_snapshot_read(
+                table_name, table_options, started_at, monitor
+            )
+            descriptor, options = context["descriptor"], context["options"]
+            name, version_id = descriptor["dataset_id"], descriptor["version_id"]
+            expected = descriptor["expected_row_count"]
+            minimum_queries = self._minimum_snapshot_queries(descriptor, options, budget)
             load = f'q = load "{name}/{version_id}";'
             query, null_flags = self._source_query(load, descriptor, options)
             context = {**context, "null_flags": null_flags}
@@ -2641,6 +3200,8 @@ def register_lakeflow_source(spark):
                         )
                         page_queries += 1
                         peak_page_rows = max(peak_page_rows, len(rows))
+                        if monitor is not None:
+                            monitor.record_page(rows)
                         if len(rows) != min(self._page_size, expected - offset):
                             raise CrmAnalyticsError("Incomplete or overlarge snapshot page")
                         if offset == expected:

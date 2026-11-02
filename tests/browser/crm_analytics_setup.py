@@ -128,6 +128,7 @@ with sync_playwright() as playwright:
         assert config["auto_increment_column"] == "_ingestion_row_id"
         assert config["selected_columns"] == ["Account.Id", "Amount"]
         assert config["skip_unchanged_versions"] is True and "version_id" not in config
+        assert "monitoring_volume_path" not in config
         assert not ({"access_token", "client_secret", "refresh_token"} & config.keys())
         results.append("raw projection and visibility attestation")
 
@@ -140,6 +141,33 @@ with sync_playwright() as playwright:
         page.locator("#destination-table").fill("changed_target")
         expect(page.locator("#download-spec")).to_be_disabled()
         results.append("download matches review; edits invalidate stale output")
+
+        page.get_by_text("Optional persistent monitoring", exact=True).click()
+        monitoring_path = "/Volumes/synthetic-catalog/crm_analytics/monitoring/events"
+        page.locator("#monitoring-volume-path").fill(monitoring_path)
+        expect(page.locator("#download-spec")).to_be_disabled()
+        spec = generate(page)
+        assert (
+            spec["objects"][0]["table"]["table_configuration"]["monitoring_volume_path"]
+            == monitoring_path
+        )
+        for invalid_path in (
+            monitoring_path + "/../escape",
+            monitoring_path + "/.hidden",
+            "/Volumes/-catalog/schema/volume",
+            monitoring_path + "/" + "a" * 256,
+        ):
+            page.locator("#monitoring-volume-path").fill(invalid_path)
+            expect(page.locator("#copy-spec")).to_be_disabled()
+            page.locator("#generate-spec").click()
+            expect(page.locator("#configuration-error")).to_contain_text("Monitoring directory")
+            expect(page.locator("#download-spec")).to_be_disabled()
+        page.locator("#monitoring-volume-path").fill("")
+        assert (
+            "monitoring_volume_path"
+            not in generate(page)["objects"][0]["table"]["table_configuration"]
+        )
+        results.append("monitoring opt-in, path validation and stale output guard")
 
         page.locator("#key-mode-strict").check()
         page.locator("#generate-spec").click()

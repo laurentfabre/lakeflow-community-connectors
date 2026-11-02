@@ -89,6 +89,11 @@ print(json.dumps(report, indent=2))</code></pre>
         <p class="hint">Generated row keys use a counter without retaining a key set. SQLite limits the business-key index page cache; it does not bound the entire process or remove API limits. Temporary key storage contains source key values and is cleaned when the read completes, fails, or is closed.</p>
       </fieldset>
       <details>
+        <summary>Optional persistent monitoring</summary>
+        <label for="monitoring-volume-path">Monitoring events directory<input id="monitoring-volume-path" placeholder="/Volumes/main/crm_analytics/monitoring/events" maxlength="1024" autocomplete="off" aria-describedby="monitoring-hint"></label>
+        <p class="hint" id="monitoring-hint">Leave blank to disable. An existing Unity Catalog Volume with runtime write access is required. Events contain attempt metrics and error categories, without source rows or credentials. Collect them in a separate monitoring job; a monitoring write failure aborts extraction. See <a href="crm-analytics.html#operations">monitoring and alerts</a>.</p>
+      </details>
+      <details>
         <summary>Optional approved schema baseline</summary>
         <p class="hint">Import a baseline exported from a reviewed preflight report. It must match this dataset, scope, naming mode, projection, and keys. A baseline is not created or approved automatically here.</p>
         <label for="baseline-file">Schema baseline JSON<input id="baseline-file" type="file" accept=".json,application/json"></label>
@@ -245,6 +250,8 @@ print(json.dumps(report, indent=2))</code></pre>
     if(selected.length!==inspection.columns.length||inspection.columns.some(column=>!column.supported))config.selected_columns=selected;
     if(el('pin-version').checked)config.version_id=inspection.version_id;
     if(config.key_validation_mode==='sqlite'){const value=Number(el('key-validation-cache-kib').value);if(!Number.isInteger(value)||value<64||value>65536)throw new Error('SQLite page cache must be an integer from 64 to 65,536 KiB.');config.key_validation_cache_kib=value;}
+    const monitoringPath=el('monitoring-volume-path').value.trim();
+    if(monitoringPath){const parts=monitoringPath.split('/');if(!monitoringPath.startsWith('/Volumes/')||parts.length<5||parts.slice(2).some(part=>!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}$/.test(part)))throw new Error('Monitoring directory must be /Volumes/catalog/schema/volume[/directory]; each part must start with a letter, digit, or underscore and contain at most 255 letters, digits, underscores, dots, or hyphens.');config.monitoring_volume_path=monitoringPath;}
     if(baseline){
       if(baseline.dataset_id!==inspection.dataset_id||baseline.column_name_mode!==inspection.column_name_mode||baseline.scope_fingerprint!==scope||(baseline.auto_increment_column||null)!==(config.auto_increment_column||null))throw new Error('Baseline dataset, naming mode, scope, or generated-key mode does not match this configuration.');
       const baselineFields=Object.keys(baseline.column_mapping), additive=el('schema-evolution-mode').value==='additive';

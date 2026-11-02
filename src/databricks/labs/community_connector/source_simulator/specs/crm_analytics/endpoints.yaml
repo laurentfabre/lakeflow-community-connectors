@@ -6,6 +6,9 @@
 #                  createdDate, totalRowCount, and xmdMain.
 #   rows_<dataset_id>_<version_id>.json: raw SOURCE-NAMED row objects.
 # The tester owns corpus generation; handlers never manufacture missing metadata.
+# OAuth lifecycle handling requests new UC-injected Spark reads, not a new
+# Salesforce HTTP endpoint. Optional monitoring writes metadata events to a UC
+# Volume and also adds no source API calls. These four routes remain complete.
 endpoints:
   - path: "/services/data/v{api_version}/wave/datasets"
     method: GET

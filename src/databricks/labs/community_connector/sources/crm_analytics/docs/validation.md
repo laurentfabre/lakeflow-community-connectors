@@ -326,3 +326,51 @@ Target propagation of accepted schema additions and representative source-scale
 benchmarks still require the intended Databricks/Salesforce environment.
 No target DDL, checkpoint reset, full refresh or customer-table migration was
 performed for these upgrades.
+
+## OAuth lifecycle and persistent monitoring — 2 November 2026
+
+Added advisory token-expiry states and a bounded diagnostic recovery path:
+one additional fresh UC-backed Spark read after an explicit authentication
+failure. The pre-ingestion gate reports persistent authentication failures with
+owner reauthorization steps. UC remains responsible for credential renewal;
+these changes do not implement a Salesforce token exchange or repair a revoked
+grant. A mid-extraction authentication failure aborts the complete attempt.
+
+Optional Volume events preserve extraction attempt status, row/page counts,
+source version age, elapsed time, HTTP/query attempts, retry/backoff counters and
+sanitized error categories. Completion means source extraction and never a
+target commit. Events use the latest status per attempt; a deadline crossed
+during completion-event persistence can produce a later failure event.
+Initialization failures and unchanged-version skips require pipeline event-log
+monitoring, while a killed worker can leave a started-only attempt.
+
+Tests redirect approved Volume filesystem operations to local temporary storage
+and use synthetic source responses. They exercise persistence failures,
+cancellation, stale-reader evidence, deadlines, counters, fingerprints and
+credential reinjection without real credentials. The collector's schema,
+strict-contract expression, checkpoint isolation and available-now lifecycle
+are tested through its Spark API contract. No local Java runtime is available,
+so this is not execution of Auto Loader, its SQL expressions, or Delta writes.
+
+Final source verification: **657 passed, two existing skips**, including 95 new
+OAuth/monitoring cases. The selected source, parser, snapshot callback,
+publication and CLI spec group passed 784 checks; the ingestion-pipeline suite
+passed 41 separately: **825 passed, two existing skips** in total. Repository
+Pylint checks on the changed source modules scored 10.00/10.
+
+Eight dedicated Chrome sandbox scenarios passed, with no script errors or
+network requests. Monitoring checks cover opt-in/omission, path validation and
+stale-output invalidation. A clean connector wheel was built and installed in
+isolation. Both installed modular and registered merged readers extracted seven
+synthetic rows and persisted the expected started/completed events using local
+temporary event storage, with 11 HTTP requests and seven query requests each.
+
+The offline setup assistant has an optional monitoring path with validation and
+stale-output invalidation. Dashboard and SQL alert templates cover extraction
+attempts, source age, authentication errors and final pipeline state. Those SQL
+templates require validation in the intended Databricks environment; no
+dashboard, notification destination, alert or collector Job was deployed.
+
+Live OAuth renewal, runtime Volume access, Auto Loader collection, SQL alerts
+and downstream target state still need workspace validation. No customer target,
+checkpoint, authorization grant or full-refresh setting was changed.

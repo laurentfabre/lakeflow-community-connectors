@@ -182,38 +182,57 @@ class _ReadBudget:
         self.max_query_requests = options["max_query_requests"]
         self.max_read_seconds = options["max_read_seconds"]
         self.query_requests = 0
+        self.http_requests = 0
+        self.retry_count = 0
+        self.retry_wait_seconds = 0.0
 
     def remaining(self) -> float:
         remaining = self.max_read_seconds - (time.monotonic() - self.started_at)
         if remaining <= 0:
-            raise CrmAnalyticsError("Snapshot exceeded max_read_seconds; entire snapshot aborted")
+            raise CrmAnalyticsError(
+                "Snapshot exceeded max_read_seconds; entire snapshot aborted", code="READ_DEADLINE"
+            )
         return remaining
 
-    def request_timeout(self, configured: float, *, query: bool) -> tuple[float, float]:
+    def request_timeout(
+        self, configured: float, *, query: bool, retry: bool = False
+    ) -> tuple[float, float]:
         timeout = min(configured, self.remaining())
         if query:
             self.ensure_query_available()
             self.query_requests += 1
+        self.http_requests += 1
+        self.retry_count += int(retry)
         return timeout, timeout
 
     def ensure_query_available(self) -> None:
         if self.query_requests >= self.max_query_requests:
-            raise CrmAnalyticsError("Snapshot exceeded max_query_requests; entire snapshot aborted")
+            raise CrmAnalyticsError(
+                "Snapshot exceeded max_query_requests; entire snapshot aborted", code="QUERY_BUDGET"
+            )
 
     def sleep(self, delay: float, *, query: bool = False) -> None:
         if query:
             self.ensure_query_available()
         if delay >= self.remaining():
             raise CrmAnalyticsError(
-                "Retry delay would exhaust max_read_seconds; entire snapshot aborted"
+                "Retry delay would exhaust max_read_seconds; entire snapshot aborted",
+                code="READ_DEADLINE",
             )
-        time.sleep(delay)
+        started = time.monotonic()
+        try:
+            time.sleep(delay)
+        finally:
+            self.retry_wait_seconds += max(0.0, time.monotonic() - started)
         self.remaining()
 
     def metrics(self) -> dict:
         remaining = self.remaining()
         return {
             "query_requests": self.query_requests,
+            "http_requests": self.http_requests,
+            "retry_count": self.retry_count,
+            "retry_wait_seconds": self.retry_wait_seconds,
             "elapsed_seconds": self.max_read_seconds - remaining,
             "max_query_requests": self.max_query_requests,
             "max_read_seconds": self.max_read_seconds,

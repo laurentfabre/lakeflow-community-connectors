@@ -22,20 +22,25 @@ def run_diagnostics(
     dataset_id: str | None = None,
     table_options: dict | None = None,
     check_count: bool = False,
+    retry_authentication: bool = True,
 ) -> dict:
-    """Read one metadata report through runtime UC token injection.
+    """Read a metadata report, with at most one fresh UC read after HTTP 401.
 
     ``discover`` lists dataset IDs; ``inspect`` previews physical fields;
     ``health`` checks options, metadata, schema policy and extraction capacity.
     ``check_count=True`` additionally executes one count query, never row samples.
     Metadata access does not prove source row visibility or a complete snapshot.
+    A second Spark read requests credential injection from UC. It does not
+    exchange tokens itself or guarantee that UC can renew revoked credentials.
     """
     if not isinstance(connection_name, str) or not connection_name.strip():
         raise CrmAnalyticsError("A nonempty UC connection name is required")
     if action not in ("health", "discover", "inspect"):
         raise CrmAnalyticsError("action must be health, discover, or inspect")
-    if type(check_count) is not bool:
+    if not isinstance(check_count, bool):
         raise CrmAnalyticsError("check_count must be a boolean")
+    if not isinstance(retry_authentication, bool):
+        raise CrmAnalyticsError("retry_authentication must be a boolean")
     if table_options is not None and not isinstance(table_options, dict):
         raise CrmAnalyticsError("table_options must be an object")
     options = {
@@ -45,6 +50,35 @@ def run_diagnostics(
     }
     if dataset_id is not None:
         options["diagnostic_dataset_id"] = dataset_id
+    previous_authentication_failure = False
+    for attempt in range(2 if retry_authentication else 1):
+        result = _diagnostic_read(spark, connection_name, options)
+        authentication_failure = result.get("code") == "AUTHENTICATION" or any(
+            check.get("name") == "AUTHENTICATION" and check.get("status") == "error"
+            for check in result.get("checks", [])
+            if isinstance(check, dict)
+        )
+        lifecycle = dict(result.get("oauth_lifecycle", {}))
+        verified = lifecycle.get("source_access_verified", False)
+        lifecycle.update(
+            managed_by="unity_catalog",
+            fresh_read_attempts=attempt + 1,
+            credential_reinjections=attempt,
+            recovered=bool(
+                previous_authentication_failure and verified and not authentication_failure
+            ),
+            reauthorization_required=bool(
+                previous_authentication_failure and authentication_failure
+            ),
+        )
+        result["oauth_lifecycle"] = lifecycle
+        if not authentication_failure or attempt or not retry_authentication:
+            return result
+        previous_authentication_failure = True
+    raise AssertionError("unreachable")
+
+
+def _diagnostic_read(spark, connection_name, options):
     try:
         rows = (
             spark.read.format("lakeflow_connect")
@@ -67,7 +101,10 @@ def run_diagnostics(
                     "name": "uc_execution",
                     "status": "error",
                     "message": "The UC-backed diagnostic read could not execute",
-                    "action": "Verify the updated reader is registered, diagnostics options are allowlisted, USE CONNECTION is granted, and Salesforce authorization is valid",
+                    "action": (
+                        "Verify the updated reader is registered, diagnostics options are "
+                        "allowlisted, USE CONNECTION is granted, and Salesforce authorization is valid"
+                    ),
                 }
             ],
         }
@@ -77,9 +114,56 @@ def run_diagnostics(
         result = json.loads(rows[0]["report"])
         if not isinstance(result, dict) or result.get("format_version") != 1:
             raise ValueError
+        if "checks" in result and (
+            not isinstance(result["checks"], list)
+            or any(not isinstance(check, dict) for check in result["checks"])
+        ):
+            raise ValueError
+        if "oauth_lifecycle" in result and not isinstance(result["oauth_lifecycle"], dict):
+            raise ValueError
         return result
     except (ValueError, TypeError, KeyError):
         raise CrmAnalyticsError("Malformed connector diagnostic report") from None
+
+
+def ensure_connection(
+    spark,
+    *,
+    connection_name: str,
+    dataset_id: str | None = None,
+    table_options: dict | None = None,
+    check_count: bool = False,
+) -> dict:
+    """Pre-ingestion gate using metadata only, or an optional count query.
+
+    A persistent 401 requires the existing connection's owner to reauthorize
+    using the same Salesforce integration user. No target/checkpoint changes or
+    source rows are written or downloaded by this helper.
+    """
+    report = run_diagnostics(
+        spark,
+        connection_name=connection_name,
+        action="health",
+        dataset_id=dataset_id,
+        table_options=table_options,
+        check_count=check_count,
+        retry_authentication=True,
+    )
+    if report.get("ready") is True:
+        return report
+    if report.get("oauth_lifecycle", {}).get("reauthorization_required"):
+        raise CrmAnalyticsError(
+            "Salesforce authentication still fails after a fresh UC-backed read. The owner must "
+            "reauthorize the existing connection as the same Salesforce integration user; verify "
+            "api and refresh_token scopes and the Salesforce refresh-token policy, then retry. "
+            "Keep tokens out of pipeline settings and preserve existing tables/checkpoints",
+            code="AUTHENTICATION",
+        )
+    raise CrmAnalyticsError(
+        "CRM Analytics preflight failed; review run_diagnostics checks for connection permissions, "
+        "configuration, schema or capacity before starting ingestion",
+        code="PREFLIGHT_FAILED",
+    )
 
 
 def validate_pipeline(spark, pipeline_spec: dict, *, check_count: bool = False) -> dict:

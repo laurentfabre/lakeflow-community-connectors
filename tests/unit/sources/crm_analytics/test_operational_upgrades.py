@@ -198,7 +198,16 @@ def test_spark_virtual_report_and_notebook_options(source, wire):
         action="inspect",
         dataset_id=DATASET,
     )
-    assert actual == report
+    assert {key: value for key, value in actual.items() if key != "oauth_lifecycle"} == {
+        key: value for key, value in report.items() if key != "oauth_lifecycle"
+    }
+    assert actual["oauth_lifecycle"] == {
+        **report["oauth_lifecycle"],
+        "fresh_read_attempts": 1,
+        "credential_reinjections": 0,
+        "recovered": False,
+        "reauthorization_required": False,
+    }
     assert fake.kwargs["databricks.connection"] == "existing-uc"
     assert fake.kwargs["tableName"] == DIAGNOSTICS_TABLE
     assert fake.kwargs["diagnostic_dataset_id"] == DATASET

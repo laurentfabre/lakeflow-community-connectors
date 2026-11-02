@@ -22,6 +22,11 @@ import requests
 from pyspark.sql.types import DecimalType, LongType, StringType, StructField, StructType
 
 from databricks.labs.community_connector.interface import LakeflowConnect
+from databricks.labs.community_connector.sources.crm_analytics.crm_analytics_monitoring import (
+    _MonitoringAttempt,
+    _ObservedSnapshotIterator,
+    validate_monitoring_path,
+)
 from databricks.labs.community_connector.sources.crm_analytics.crm_analytics_operations import (
     DIAGNOSTICS_TABLE,
     diagnostic_report,
@@ -210,7 +215,9 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                 session.cookies.clear()
                 timeout = (
                     budget.request_timeout(
-                        self._timeout, query=method == "POST" and path == self._base + "/query"
+                        self._timeout,
+                        query=method == "POST" and path == self._base + "/query",
+                        retry=attempt > 0,
                     )
                     if budget is not None
                     else (self._timeout, self._timeout)
@@ -239,7 +246,11 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                 status = response.status_code
                 if status == 401:
                     raise CrmAnalyticsError(
-                        "CRM Analytics authentication expired or invalid; renew the injected token externally",
+                        "CRM Analytics authentication expired or invalid; start a fresh UC-backed read "
+                        "to request credential renewal. If HTTP 401 persists, the connection owner must "
+                        "reauthorize the existing UC connection as the same Salesforce integration user. "
+                        "Do not copy tokens into pipeline settings; "
+                        "retry the complete pinned snapshot",
                         code="AUTHENTICATION",
                     )
                 if status not in _RETRY_STATUSES:
@@ -339,6 +350,41 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
             path, params = self._next_link(next_url), None
 
     @staticmethod
+    def _validate_destination_keys(options, keys, mode, auto_column):
+        # A shared pipeline override must match the source's destination keys.
+        if "primary_keys" not in options:
+            return
+        destination_keys = options.pop("primary_keys")
+        if isinstance(destination_keys, str):
+            try:
+                destination_keys = json.loads(destination_keys)
+            except ValueError:
+                raise CrmAnalyticsError(
+                    "primary_keys override must contain mapped destination names"
+                ) from None
+        expected_keys = (
+            [_GENERATED_VERSION_COLUMN, auto_column]
+            if auto_column
+            else [encode_column_name(_field_name(k), mode) for k in keys]
+        )
+        if destination_keys != expected_keys:
+            raise CrmAnalyticsError(
+                "primary_keys override does not match generated version/row keys"
+                if auto_column
+                else "primary_keys override does not match mapped source_primary_keys"
+            )
+
+    @staticmethod
+    def _normalize_schema_policy(options):
+        if "schema_evolution_mode" in options and "schema_baseline" not in options:
+            raise CrmAnalyticsError("schema_evolution_mode requires an approved schema_baseline")
+        if "schema_baseline" in options:
+            options["schema_baseline"] = validate_schema_baseline(options["schema_baseline"])
+            options.setdefault("schema_evolution_mode", "strict")
+            if options["schema_evolution_mode"] not in ("strict", "additive"):
+                raise CrmAnalyticsError("schema_evolution_mode must be strict or additive")
+
+    @staticmethod
     def _table_options(table_options: dict[str, str]) -> dict:
         # Spark passes connection and framework options to schema()/read_table()
         # together with table options. Normalize casing (CaseInsensitiveDict)
@@ -401,6 +447,7 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
             "schema_evolution_mode",
             "key_validation_mode",
             "key_validation_cache_kib",
+            "monitoring_volume_path",
         }
         unknown = set(options) - allowed
         if unknown:
@@ -408,13 +455,11 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
             raise CrmAnalyticsError(
                 f"Unknown table option(s): {names}; filters and row caps are not supported"
             )
-        if "schema_evolution_mode" in options and "schema_baseline" not in options:
-            raise CrmAnalyticsError("schema_evolution_mode requires an approved schema_baseline")
-        if "schema_baseline" in options:
-            options["schema_baseline"] = validate_schema_baseline(options["schema_baseline"])
-            options.setdefault("schema_evolution_mode", "strict")
-            if options["schema_evolution_mode"] not in ("strict", "additive"):
-                raise CrmAnalyticsError("schema_evolution_mode must be strict or additive")
+        if "monitoring_volume_path" in options:
+            options["monitoring_volume_path"] = validate_monitoring_path(
+                options["monitoring_volume_path"]
+            )
+        CrmAnalyticsLakeflowConnect._normalize_schema_policy(options)
         expected = options.get("expected_snapshot_fingerprint")
         if expected is not None and (
             not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected)
@@ -454,28 +499,7 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                 raise CrmAnalyticsError(
                     "selected_columns must include every source_primary_keys field"
                 )
-        # primary_keys is a shared pipeline destination override. If present,
-        # accept only this naming mode's counterpart, preventing a wrong merge key.
-        if "primary_keys" in options:
-            destination_keys = options.pop("primary_keys")
-            if isinstance(destination_keys, str):
-                try:
-                    destination_keys = json.loads(destination_keys)
-                except ValueError:
-                    raise CrmAnalyticsError(
-                        "primary_keys override must contain mapped destination names"
-                    ) from None
-            expected_keys = (
-                [_GENERATED_VERSION_COLUMN, auto_column]
-                if auto_column
-                else [encode_column_name(_field_name(k), mode) for k in keys]
-            )
-            if destination_keys != expected_keys:
-                raise CrmAnalyticsError(
-                    "primary_keys override does not match generated version/row keys"
-                    if auto_column
-                    else "primary_keys override does not match mapped source_primary_keys"
-                )
+        CrmAnalyticsLakeflowConnect._validate_destination_keys(options, keys, mode, auto_column)
         precision = _integer(options.get("decimal_precision", "38"), "decimal_precision", 1, 38)
         options["decimal_precision"] = precision
         options["decimal_scale"] = _integer(
@@ -705,6 +729,7 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
         # Each read gets fresh limits rather than inheriting a cached allowance.
         options.pop("max_query_requests")
         options.pop("max_read_seconds")
+        options.pop("monitoring_volume_path", None)
         expected_fingerprint = options.pop("expected_snapshot_fingerprint", None)
         key = _fingerprint([name, options])
         if key not in self._contexts:
@@ -1012,27 +1037,62 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
     def read_table(
         self, table_name: str, start_offset: dict | None, table_options: dict[str, str]
     ) -> tuple[Iterator[dict], None]:
+        raw = {str(k).lower(): v for k, v in (table_options or {}).items()}
+        if table_name == DIAGNOSTICS_TABLE or raw.get("monitoring_volume_path") is None:
+            return self._read_snapshot_table(table_name, start_offset, table_options)
         started_at = time.monotonic()
-        if start_offset is not None and start_offset != {}:
-            raise CrmAnalyticsError("Snapshot reads do not accept incremental offsets")
-        if table_name == DIAGNOSTICS_TABLE:
+        # Even a failed started-event write invalidates old success evidence.
+        # Derive only the exact cache key; no metadata requests before the event.
+        try:
+            identity_options = self._table_options(table_options)
+            for control in (
+                "max_query_requests",
+                "max_read_seconds",
+                "monitoring_volume_path",
+                "expected_snapshot_fingerprint",
+            ):
+                identity_options.pop(control, None)
+            self._evidence.pop(_fingerprint([table_name, identity_options]), None)
+        except CrmAnalyticsError:
+            pass  # Record other configuration failures after a started event.
+        attempt = _MonitoringAttempt(raw.get("monitoring_volume_path"), table_name, started_at)
 
-            def report_rows():
-                yield {
-                    "report": json.dumps(diagnostic_report(self, table_options), ensure_ascii=True)
-                }
+        def invalidate():
+            key = attempt.context_key
+            if key is not None and self._read_epochs.get(key) == attempt.read_epoch:
+                self._evidence.pop(key, None)
 
-            return report_rows(), None
+        try:
+            rows, _ = self._read_snapshot_table(
+                table_name, start_offset, table_options, monitor=attempt
+            )
+        except BaseException as error:
+            attempt.record_failure(error)
+            raise
+        return _ObservedSnapshotIterator(rows, attempt, invalidate), None
+
+    def _prepare_snapshot_read(self, table_name, table_options, started_at, monitor):
+        """Create per-read budget and epoch without changing the pinned identity."""
         budget = _ReadBudget(started_at, self._table_options(table_options))
+        if monitor is not None:
+            # Include monitoring startup time in the same overall deadline.
+            budget.started_at = monitor.started_at
+            monitor.budget = budget
         key, context = self._context(table_name, table_options, budget=budget)
         self._evidence.pop(key, None)
         epoch = self._read_epochs.get(key, 0) + 1
         self._read_epochs[key] = epoch
+        if monitor is not None:
+            monitor.context_key, monitor.read_epoch = key, epoch
         budget.remaining()
         descriptor, options = context["descriptor"], context["options"]
-        name, version_id = descriptor["dataset_id"], descriptor["version_id"]
-        expected = descriptor["expected_row_count"]
-        if expected > options["max_keys"]:
+        if monitor is not None:
+            monitor.descriptor = descriptor
+        return budget, key, context, epoch
+
+    def _minimum_snapshot_queries(self, descriptor, options, budget):
+        """Reject impossible full-read capacities before the first SAQL query."""
+        if descriptor["expected_row_count"] > options["max_keys"]:
             raise CrmAnalyticsError(
                 "Snapshot exceeds configured max_keys validation capacity; increase explicitly"
             )
@@ -1048,6 +1108,34 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
             raise CrmAnalyticsError(
                 "Snapshot requires more than max_query_requests; increase explicitly"
             )
+        return minimum_queries
+
+    def _read_snapshot_table(
+        self,
+        table_name: str,
+        start_offset: dict | None,
+        table_options: dict[str, str],
+        *,
+        monitor=None,
+    ) -> tuple[Iterator[dict], None]:
+        started_at = time.monotonic()
+        if start_offset is not None and start_offset != {}:
+            raise CrmAnalyticsError("Snapshot reads do not accept incremental offsets")
+        if table_name == DIAGNOSTICS_TABLE:
+
+            def report_rows():
+                yield {
+                    "report": json.dumps(diagnostic_report(self, table_options), ensure_ascii=True)
+                }
+
+            return report_rows(), None
+        budget, key, context, epoch = self._prepare_snapshot_read(
+            table_name, table_options, started_at, monitor
+        )
+        descriptor, options = context["descriptor"], context["options"]
+        name, version_id = descriptor["dataset_id"], descriptor["version_id"]
+        expected = descriptor["expected_row_count"]
+        minimum_queries = self._minimum_snapshot_queries(descriptor, options, budget)
         load = f'q = load "{name}/{version_id}";'
         query, null_flags = self._source_query(load, descriptor, options)
         context = {**context, "null_flags": null_flags}
@@ -1078,6 +1166,8 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                     )
                     page_queries += 1
                     peak_page_rows = max(peak_page_rows, len(rows))
+                    if monitor is not None:
+                        monitor.record_page(rows)
                     if len(rows) != min(self._page_size, expected - offset):
                         raise CrmAnalyticsError("Incomplete or overlarge snapshot page")
                     if offset == expected:

@@ -63,7 +63,9 @@ connection:
       description: >
         Additional attempts after eligible connection failures, timeouts,
         HTTP 429, or HTTP 500/502/503/504, from 0 to 8 inclusive; defaults to 3.
-        HTTP 401 fails immediately; the connector does not refresh tokens.
+        HTTP 401 aborts the current snapshot. Notebook diagnostics request at
+        most one fresh UC-backed read for new runtime credential injection;
+        persistent HTTP 401 requires the connection owner to reauthorize.
 
     - name: max_retry_delay_seconds
       type: integer
@@ -105,9 +107,17 @@ connection:
 # Complete connector table-option contract. Do not place these options in the
 # connection parameters. Framework/connection transport (including source_name)
 # is ignored by the connector and is not a dataset filter or table option.
-external_options_allowlist: "source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,auto_increment_column,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds,expected_snapshot_fingerprint,key_validation_mode,key_validation_cache_kib,schema_baseline,schema_evolution_mode,diagnostic_action,diagnostic_dataset_id,diagnostic_table_options,diagnostic_check_count"
+external_options_allowlist: "source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,auto_increment_column,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds,expected_snapshot_fingerprint,key_validation_mode,key_validation_cache_kib,schema_baseline,schema_evolution_mode,diagnostic_action,diagnostic_dataset_id,diagnostic_table_options,diagnostic_check_count,monitoring_volume_path"
 
 # Optional operational controls:
+# monitoring_volume_path: optional literal /Volumes/catalog/schema/volume[/path]
+#   for immutable, metadata-only extraction lifecycle JSON events. Disabled by
+#   default. Requires WRITE VOLUME on the executing worker identity. Enabled
+#   monitoring write failures abort without successful read evidence. Events do
+#   not acknowledge a Delta/Lakeflow target commit, replace checkpoints or prove
+#   target freshness. Collect with collect_monitoring_events in a separate job.
+#   A killed process can leave only started; version-skipping emits no attempt.
+#   No source rows, key values, tokens, free-form errors or scope text persisted.
 # key_validation_mode: memory (default) or sqlite for exact local disk-backed
 #   validation of strict business keys. Generated version/row keys use a counter.
 # key_validation_cache_kib: SQLite page cache budget 64..65536, default 8192.
