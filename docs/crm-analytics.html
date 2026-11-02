@@ -36,7 +36,7 @@
       <a href="#rollout">Customer &amp; partner rollout</a>
       <a href="#resources">Resources &amp; support</a>
     </nav>
-    <div class="sidebar-foot">Source: <code>crm_analytics</code><br>Package version: 0.1.0<br>Guide reviewed: 30 October 2026
+    <div class="sidebar-foot">Source: <code>crm_analytics</code><br>Package version: 0.1.0<br>Guide reviewed: 2 November 2026
       <a href="https://github.com/laurentfabre/lakeflow-community-connectors/tree/feat/connector-crm_analytics">View connector branch ↗</a>
       <a href="../LICENSE">Apache 2.0 license</a>
     </div>
@@ -85,7 +85,7 @@
           <tr><th scope="row">Completeness and key checks</th><td><span class="tag yes">Implemented</span></td><td>Counts before/after, exact page lengths, terminal empty page, unique/non-null ingestion keys, and metadata rechecks. Strict mode validates source keys; generated mode validates technical keys.</td></tr>
           <tr><th scope="row">Composite business keys</th><td><span class="tag yes">Implemented</span></td><td>Operator-selected scalar dimensions or physical date strings. Dataset IDs and numeric measures are not row keys.</td></tr>
           <tr><th scope="row">Auto-increment column for raw ingestion</th><td><span class="tag yes">Implemented</span></td><td>Opt-in per-version row numbers plus a version column preserve duplicate and null business keys for downstream cleaning. Their pair identifies ingested rows; use a new raw target or migrate the key contract.</td></tr>
-          <tr><th scope="row">Explicit column selection</th><td><span class="tag yes">Implemented</span></td><td>Project supported physical fields and every key. Selection does not filter rows. Projection changes require migration.</td></tr>
+          <tr><th scope="row">Explicit column selection</th><td><span class="tag yes">Implemented</span></td><td>Project supported physical fields and every key. Omit <code>selected_columns</code> to read all physical columns; wildcards are unsupported. Selection does not filter rows. Projection changes require migration.</td></tr>
           <tr><th scope="row">Readable and legacy column names</th><td><span class="tag yes">Implemented</span></td><td>Readable names by default, source-name metadata, collision rejection, and <code>legacy_hex</code> compatibility. Destination name-length limits remain an open runtime concern.</td></tr>
           <tr><th scope="row">Lossless decimals, strings, and nulls</th><td><span class="tag yes">Implemented</span></td><td>Measures use configurable decimals; rounding/overflow fails. Strings and non-key nulls are preserved. Verify live value equality.</td></tr>
           <tr><th scope="row">Physical date fields</th><td><span class="tag check">Validate</span></td><td>Conservative XMD mapping exists. Date role overlaps and real source shapes need validation; epochs remain integers.</td></tr>
@@ -292,7 +292,7 @@ community-connector run_pipeline crm_analytics_eval</code></pre></div>
         <tr><th scope="row"><code>scope_fingerprint</code></th><td>Required</td><td>Nonblank stable identifier, ≤ 1,024 characters, for the approved principal/visibility scope. A change requires an approved new baseline.</td></tr>
         <tr><th scope="row"><code>version_id</code></th><td>Current version resolved per context if omitted</td><td>Exact 15- or 18-character version ID. Explicitly pin across independent schema/read contexts. Expiration fails the capture.</td></tr>
         <tr><th scope="row"><code>column_name_mode</code></th><td><code>readable</code></td><td><code>readable</code> or <code>legacy_hex</code>. Changing names requires migration; preserve legacy mode for existing hex-named targets.</td></tr>
-        <tr><th scope="row"><code>selected_columns</code></th><td>All physical fields</td><td>Nonempty distinct physical-name array including every key. Input order is normalized. Unknown/derived/unsafe selections fail; selection changes require migration.</td></tr>
+        <tr><th scope="row"><code>selected_columns</code></th><td>All physical fields when omitted</td><td>Remove this option to <a href="#column-selection">read all physical columns</a>. Otherwise use a nonempty distinct physical-name array including every key. <code>["*"]</code> and <code>[]</code> are unsupported. Input order is normalized; selection changes require migration.</td></tr>
         <tr><th scope="row"><code>decimal_precision</code></th><td>38</td><td>1–38, shared by all measures. A lossless contract is required.</td></tr>
         <tr><th scope="row"><code>decimal_scale</code></th><td>18</td><td>0 through configured precision. Lowering precision below 18 also requires lowering scale. Overflow or rounding fails.</td></tr>
         <tr><th scope="row"><code>max_keys</code></th><td>1,000,000</td><td>1–10,000,000; bounds the in-memory full-snapshot uniqueness set. Exceeding it fails; it does not truncate.</td></tr>
@@ -310,6 +310,17 @@ community-connector run_pipeline crm_analytics_eval</code></pre></div>
 
     <section id="data-contract" aria-labelledby="data-title">
       <div class="eyebrow">08 / Preserve meaning</div><h2 id="data-title">Data, names, and deletion behavior</h2>
+      <h3 id="column-selection">Read all columns or select a subset</h3>
+      <p>To read all physical columns, <strong>remove <code>selected_columns</code> entirely</strong> from <code>table_configuration</code>. Wildcards are unsupported: <code>"selected_columns": ["*"]</code> treats <code>*</code> as a literal column name and fails validation. An empty array <code>[]</code> also fails; it does not select all columns.</p>
+      <p>This raw-ingestion configuration reads all physical columns and adds the generated version/row key pair:</p>
+      <div class="code-block"><div class="code-bar"><span>JSON · table_configuration · all physical columns</span><button class="copy" type="button" hidden>Copy</button></div><pre><code>{
+  "scd_type": "SCD_TYPE_1",
+  "auto_increment_column": "_ingestion_row_id",
+  "supported_scope": "scalar_full_visibility",
+  "scope_fingerprint": "&lt;APPROVED_STABLE_VISIBILITY_SCOPE&gt;"
+}</code></pre></div>
+      <p>The same omission works in strict business-key mode; keep its required <code>source_primary_keys</code>. All-column mode validates every field and fails on unsupported fields instead of skipping them. To exclude unsupported or unwanted fields, set a nonempty array of exact physical source names, including every configured business-key field.</p>
+      <p>Switching an existing selected-column target to all columns changes its schema and configuration identity. Use a new destination or an explicit schema/key/checkpoint migration.</p>
       <h3>Data type mapping</h3>
       <div class="table-wrap" tabindex="0" role="region" aria-label="Data type mappings"><table><thead><tr><th scope="col">Physical source field</th><th scope="col">Destination type</th><th scope="col">Behavior</th></tr></thead><tbody>
         <tr><th scope="row">Scalar dimension</th><td><code>STRING</code></td><td>Preserves strings, including leading zeros. Arrays, objects, and non-string dimensions fail.</td></tr>

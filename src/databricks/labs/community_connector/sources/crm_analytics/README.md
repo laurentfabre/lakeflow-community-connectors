@@ -170,9 +170,28 @@ the projection, never row visibility or the completeness checks.
 
 ### Selecting columns
 
-Omit `selected_columns` to retain the strict all-physical-column behavior. To
-exclude unsupported or unwanted columns, supply a nonempty JSON array of exact
-source physical names, for example `["Account.Id","FiscalYear","Amount"]`.
+To read all physical columns, remove `selected_columns` entirely from
+`table_configuration`. Wildcards are not supported: `"selected_columns": ["*"]`
+treats `*` as a literal column name and fails validation. An empty array `[]`
+also fails; it does not mean all columns.
+
+For example, this raw-ingestion configuration reads all physical columns and
+adds the generated version/row key pair:
+
+```json
+{
+  "scd_type": "SCD_TYPE_1",
+  "auto_increment_column": "_ingestion_row_id",
+  "supported_scope": "scalar_full_visibility",
+  "scope_fingerprint": "<APPROVED_STABLE_VISIBILITY_SCOPE>"
+}
+```
+
+The same omission works in strict business-key mode; keep its required
+`source_primary_keys`. All-column mode still validates every field and fails on
+unsupported fields instead of skipping them. To exclude unsupported or unwanted
+columns, supply a nonempty JSON array of exact source physical names, for example
+`["Account.Id","FiscalYear","Amount"]`.
 Every field in `source_primary_keys` must be included. Empty, duplicate, unknown,
 derived or unsafe requested names fail; selected fields still require supported
 types and values. Malformed metadata is rejected even for unselected fields.
@@ -311,7 +330,7 @@ Set these directly under each `table` object in the pipeline specification:
 | `scope_fingerprint` | Yes | Nonblank, stable, operator-managed identifier for the approved principal/visibility scope; at most 1,024 characters. Do not use a token, run ID, or capture timestamp. Changes require an approved new baseline, not inferred deletions against an old target. |
 | `version_id` | No | Exact 15- or 18-character dataset-version ID. Otherwise current version is resolved once per table context. Explicitly pin it across independent schema/read contexts. |
 | `column_name_mode` | No | `readable` (default) or `legacy_hex`. Case-insensitive collisions fail. Preserve `legacy_hex` for existing hex-named targets; changing modes requires migration. |
-| `selected_columns` | No | Nonempty JSON array of distinct source physical names, including all business keys. Omit for all physical columns. Order is immaterial; changing selection requires migration. |
+| `selected_columns` | No | Nonempty JSON array of distinct source physical names, including all business keys. Remove this option to read all physical columns; `["*"]` and an empty array are unsupported. Order is immaterial; changing selection requires migration. |
 | `decimal_precision` | No | Measure precision from 1–38; default 38. All measures use this contract. |
 | `decimal_scale` | No | Measure scale from 0 through `decimal_precision`; default 18. Lowering precision below 18 also requires lowering scale. Values that require rounding or overflow fail the capture. |
 | `max_keys` | No | Maximum full-snapshot uniqueness-validation set: 1–10,000,000; default 1,000,000. Exceeding it fails; it never truncates a snapshot. Size it together with available memory. |

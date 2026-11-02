@@ -61,6 +61,13 @@ type, visibility, metadata and budget safeguards remain active. Validate full
 source-to-target multiset equality, wide-projection ordering, repeated reads,
 version transitions, and real Spark/Delta application before deployment.
 
+Omit `selected_columns` from `table_configuration` to read all physical columns,
+in either strict business-key or generated-row mode. Wildcards such as `["*"]`
+and an empty list are not supported. All-column mode validates every field and
+fails on unsupported fields; use an explicit physical-name list to exclude them.
+Switching an existing explicit projection to all-column mode requires a new
+destination or an explicit schema/key/checkpoint migration.
+
 Readability must not change identity: persist the original field names in Spark
 field metadata and the descriptor's `column_mapping`. Keep naming mode, keys,
 visibility, projection and schema consistent with existing targets/checkpoints.
