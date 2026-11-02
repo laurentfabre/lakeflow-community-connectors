@@ -6,6 +6,47 @@ import pytest
 from databricks.labs.community_connector.libs.spec_parser import SpecParser
 
 
+@pytest.mark.parametrize(
+    "value, expected", [(True, True), (False, False), ("TRUE", True), ("false", False)]
+)
+def test_skip_unchanged_versions_is_framework_only(value, expected):
+    parser = SpecParser(
+        {
+            "connection_name": "test",
+            "objects": [
+                {
+                    "table": {
+                        "source_table": "t",
+                        "table_configuration": {"skip_unchanged_versions": value},
+                    }
+                }
+            ],
+        }
+    )
+    assert parser.get_skip_unchanged_versions("t") is expected
+    assert parser.get_skip_unchanged_versions("missing") is False
+    assert parser.get_table_configurations() == {"t": {}}
+
+
+@pytest.mark.parametrize("value", [1, 0, None, "yes", [], {}])
+def test_skip_unchanged_versions_rejects_invalid_values(value):
+    parser = SpecParser(
+        {
+            "connection_name": "test",
+            "objects": [
+                {
+                    "table": {
+                        "source_table": "t",
+                        "table_configuration": {"skip_unchanged_versions": value},
+                    }
+                }
+            ],
+        }
+    )
+    with pytest.raises(ValueError, match="must be true or false"):
+        parser.get_skip_unchanged_versions("t")
+
+
 def _build_valid_spec():
     return {
         "connection_name": "my_connection",

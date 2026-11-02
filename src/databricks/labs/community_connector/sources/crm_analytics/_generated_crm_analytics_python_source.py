@@ -1151,9 +1151,15 @@ def register_lakeflow_source(spark):
                 "auto_increment_column",
                 "max_query_requests",
                 "max_read_seconds",
+                "expected_snapshot_fingerprint",
             }
             if set(options) - allowed:
                 raise CrmAnalyticsError("Unknown table option; filters and row caps are not supported")
+            expected = options.get("expected_snapshot_fingerprint")
+            if expected is not None and (
+                not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected)
+            ):
+                raise CrmAnalyticsError("expected_snapshot_fingerprint must be a SHA-256 hex digest")
             if options.get("supported_scope") != "scalar_full_visibility":
                 raise CrmAnalyticsError(
                     "Attest supported_scope=scalar_full_visibility after checking physical fields and visibility"
@@ -1429,6 +1435,7 @@ def register_lakeflow_source(spark):
             # Each read gets fresh limits rather than inheriting a cached allowance.
             options.pop("max_query_requests")
             options.pop("max_read_seconds")
+            expected_fingerprint = options.pop("expected_snapshot_fingerprint", None)
             key = _fingerprint([name, options])
             if key not in self._contexts:
                 dataset = self._dataset(name, budget=budget)
@@ -1482,7 +1489,12 @@ def register_lakeflow_source(spark):
                         key_mode="version_row_number",
                     )
                 self._contexts[key] = {"descriptor": descriptor, "options": options, "kinds": kinds}
-            return key, self._contexts[key]
+            context = self._contexts[key]
+            if expected_fingerprint is not None and (
+                _fingerprint(context["descriptor"]) != expected_fingerprint
+            ):
+                raise CrmAnalyticsError("Snapshot metadata changed since pipeline version resolution")
+            return key, context
 
         def pin_table(self, table_name: str, table_options: dict[str, str]) -> dict:
             """Resolve once, returning a JSON-safe snapshot descriptor (no credentials).
@@ -1521,7 +1533,13 @@ def register_lakeflow_source(spark):
             }
 
         def read_table_metadata(self, table_name: str, table_options: dict[str, str]) -> dict:
-            return {"ingestion_type": "snapshot", **self.pin_table(table_name, table_options)}
+            pin = self.pin_table(table_name, table_options)
+            return {
+                "ingestion_type": "snapshot",
+                **pin,
+                "snapshot_version": pin["version_id"],
+                "snapshot_fingerprint": _fingerprint(pin),
+            }
 
         def get_read_evidence(self, table_name: str, table_options: dict[str, str]) -> dict:
             """Return evidence only after this instance's latest iterator completed."""
@@ -2117,6 +2135,8 @@ def register_lakeflow_source(spark):
                         StructField("primary_keys", ArrayType(StringType()), True),
                         StructField("cursor_field", StringType(), True),
                         StructField("ingestion_type", StringType(), True),
+                        StructField("snapshot_version", StringType(), True),
+                        StructField("snapshot_fingerprint", StringType(), True),
                     ]
                 )
             if table == NAMESPACES_TABLE:

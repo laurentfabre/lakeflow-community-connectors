@@ -1,6 +1,7 @@
 """Offline, synthetic CRM Analytics source-contract tests; no live proof implied."""
 
 import copy
+from contextlib import closing
 import json
 import os
 import pickle
@@ -1150,3 +1151,116 @@ def test_cookies_are_cleared_after_transport_failure(simulator, monkeypatch, exc
         assert all(not session.cookies for session in sessions)
     finally:
         source.close()
+
+
+def test_snapshot_metadata_supports_checkpointed_pipeline(connector, wire):
+    calls, _ = wire
+    metadata = connector.read_table_metadata(DATASET, OPTIONS)
+    assert metadata["snapshot_version"] == VERSION
+    assert len(metadata["snapshot_fingerprint"]) == 64
+    assert not any(call.method == "POST" for call in calls)
+    pinned = {
+        **OPTIONS,
+        "version_id": VERSION,
+        "expected_snapshot_fingerprint": metadata["snapshot_fingerprint"],
+    }
+    with closing(CrmAnalyticsLakeflowConnect(CONFIG)) as independent:
+        assert (
+            independent.read_table_metadata(DATASET, pinned)["snapshot_fingerprint"]
+            == metadata["snapshot_fingerprint"]
+        )
+        assert len(exhaust(independent, pinned)) == metadata["expected_row_count"]
+
+
+@pytest.mark.parametrize("change", ["scope", "projection", "security", "schema", "count"])
+def test_snapshot_fingerprint_changes_and_rejects_stale_pin(connector, simulator, wire, change):
+    calls, _ = wire
+    metadata = connector.read_table_metadata(DATASET, OPTIONS)
+    options = dict(OPTIONS)
+    version = simulator.corpus.tables["versions"][0]
+    if change == "scope":
+        options["scope_fingerprint"] = "other-approved-scope"
+    elif change == "projection":
+        options["selected_columns"] = '["Account.Id", "Region"]'
+    elif change == "security":
+        version["predicate"] = "changed-predicate"
+    elif change == "schema":
+        version["xmdMain"]["dimensions"].append({"field": "NewField"})
+    else:
+        version["totalRowCount"] += 1
+    with closing(CrmAnalyticsLakeflowConnect(CONFIG)) as fresh:
+        changed = fresh.read_table_metadata(DATASET, options)
+        assert changed["snapshot_fingerprint"] != metadata["snapshot_fingerprint"]
+        calls.clear()
+        with pytest.raises(CrmAnalyticsError, match="metadata changed since pipeline"):
+            fresh.read_table(
+                DATASET,
+                None,
+                {
+                    **options,
+                    "version_id": VERSION,
+                    "expected_snapshot_fingerprint": metadata["snapshot_fingerprint"],
+                },
+            )
+        assert not any(call.method == "POST" for call in calls)
+
+
+def test_snapshot_fingerprint_ignores_operational_budgets_and_token(connector):
+    original = connector.read_table_metadata(DATASET, OPTIONS)["snapshot_fingerprint"]
+    changed = connector.read_table_metadata(
+        DATASET,
+        {
+            **OPTIONS,
+            "max_read_seconds": "3600",
+            "max_query_requests": "10000",
+            "access_token_expiration": "different",
+            "refresh_token_expiration": "other",
+        },
+    )["snapshot_fingerprint"]
+    assert changed == original
+
+
+@pytest.mark.parametrize("value", ["", "bad", "A" * 64, "a" * 63, 42])
+def test_invalid_expected_snapshot_fingerprint_fails(connector, value):
+    with pytest.raises(CrmAnalyticsError, match="must be a SHA-256"):
+        connector.read_table_metadata(DATASET, {**OPTIONS, "expected_snapshot_fingerprint": value})
+
+
+def test_version_callback_with_real_source_reads_and_simulated_refresh(simulator, wire):
+    from databricks.labs.community_connector.pipeline.snapshot_versions import (
+        versioned_snapshot_source,
+    )
+
+    def callback():
+        with closing(CrmAnalyticsLakeflowConnect(CONFIG)) as probe:
+            metadata = probe.read_table_metadata(DATASET, OPTIONS)
+        pinned = {
+            **OPTIONS,
+            "version_id": metadata["snapshot_version"],
+            "expected_snapshot_fingerprint": metadata["snapshot_fingerprint"],
+        }
+
+        def read():
+            with closing(CrmAnalyticsLakeflowConnect(CONFIG)) as source:
+                return exhaust(source, pinned)
+
+        return versioned_snapshot_source(metadata, {"destination": "synthetic_target"}, read)
+
+    first_rows, committed = callback()(None)
+    assert first_rows
+    wire[0].clear()
+    assert callback()(committed) is None
+    assert wire[0] and all(call.method == "GET" for call in wire[0])
+    second = copy.deepcopy(simulator.corpus.tables["versions"][0])
+    second.update(id=NEXT_VERSION, createdDate="2026-09-02T00:00:00Z")
+    simulator.corpus.tables["versions"].append(second)
+    rows = copy.deepcopy(simulator.corpus.tables[ROWS])
+    rows[0]["Amount"] = "19.00"
+    simulator.corpus.tables[f"rows_{DATASET}_{NEXT_VERSION}"] = rows
+    simulator.corpus.tables["datasets"][0]["currentVersionId"] = NEXT_VERSION
+    next_rows, next_committed = callback()(committed)
+    assert next_committed > committed
+    assert next_rows != first_rows
+    wire[0].clear()
+    assert callback()(next_committed) is None
+    assert wire[0] and all(call.method == "GET" for call in wire[0])

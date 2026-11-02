@@ -65,7 +65,7 @@ pipeline specification. Never put credentials in source code or fixtures.
 Set `externalOptionsAllowList` to:
 
 ```text
-source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,auto_increment_column,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds
+source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,auto_increment_column,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds,expected_snapshot_fingerprint
 ```
 
 These table options belong under each table's `table_configuration`, not in the
@@ -167,6 +167,55 @@ caps. Supported scalar values for the chosen projection and stable full row
 visibility must be established by the operator; runtime checks cannot detect
 every multivalue or equal-count permission change. Column selection changes only
 the projection, never row visibility or the completeness checks.
+
+### Skip unchanged published versions
+
+In the repository's workspace pipeline (`ingest(spark, pipeline_spec)`), enable
+`skip_unchanged_versions` in `table_configuration` to avoid extracting a snapshot
+that Lakeflow has already committed. Omit `version_id` to resolve the latest
+published version on each update; an explicit pin intentionally keeps that version.
+
+```json
+{
+  "scd_type": "SCD_TYPE_1",
+  "skip_unchanged_versions": true,
+  "auto_increment_column": "_ingestion_row_id",
+  "supported_scope": "scalar_full_visibility",
+  "scope_fingerprint": "<APPROVED_STABLE_VISIBILITY_SCOPE>"
+}
+```
+
+This example reads all physical columns. Keep an explicit `selected_columns`
+list if needed. Deploy the updated framework **and** source/generated reader,
+and add `expected_snapshot_fingerprint` to the UC connection's allowlist. The
+framework supplies that internal guard automatically; do not set it manually.
+`skip_unchanged_versions` is a framework control and is stripped before source
+reads, so it does not belong in the connection allowlist.
+
+The pipeline probes metadata, pins the version and metadata fingerprint across
+Spark schema/read instances, and uses a Lakeflow snapshot callback. It returns
+`None` when the committed version and schema/security/scope/configuration identity
+match. Metadata requests still occur, but no SAQL row/count queries run. A new
+version requires a full snapshot. Skipping assumes values remain stable within a
+published version; metadata probes cannot detect same-version value changes
+without metadata drift. Leave the flag false when full rereads are required.
+Failures propagate and do not acknowledge the snapshot in application memory; Lakeflow manages target/checkpoint recovery.
+A validated empty snapshot still reaches snapshot CDC and may delete all rows.
+
+Default is `false`, retaining full reads on every update. This option applies to
+snapshot ingestion in the repository workspace pipeline, not direct reader calls
+or the managed `ingestion_definition` service. For CLI deployment use
+`--use-workspace-pipeline` with this fork/branch. Use a **new destination** when
+enabling or disabling this mode on an existing flow, or explicitly migrate its
+checkpoint:
+the callback uses a string sequence instead of the default snapshot sequence.
+An incompatible checkpoint fails before extraction; do not reset it implicitly.
+Schema/key/scope changes still require their normal migration or approval.
+
+Generated version/row keys preserve raw rows but do not identify business entities
+across versions. Clean/deduplicate downstream and use stable business keys for
+business updates. This feature skips unchanged versions; it adds no row-level CDC
+or historical-version replay.
 
 ### Selecting columns
 
@@ -315,6 +364,7 @@ Set these directly under each `table` object in the pipeline specification:
 
 | Option | Required | Description |
 | --- | --- | --- |
+| `skip_unchanged_versions` | No | Boolean, default `false`. Workspace snapshot pipeline only: skip extraction when version and metadata identity match Lakeflow's processed checkpoint. Deploy updated framework/source and use a new destination or explicit checkpoint migration. |
 | `scd_type` | No | `SCD_TYPE_1` by default, or the framework's `SCD_TYPE_2` snapshot history mode. This is snapshot comparison, not source-native CDC. `APPEND_ONLY` is not supported for this snapshot source. |
 | `primary_keys` | No | Destination-key override. Normally omit. Must match the connector's keys: mapped source keys by default, or `["_crm_analytics_version_id", "<auto_increment_column>"]` in generated mode. |
 | `sequence_by` | No | Leave unset. The snapshot source has no row cursor, and the snapshot pipeline does not use this option to order dataset versions. |
@@ -328,6 +378,7 @@ Set these directly under each `table` object in the pipeline specification:
 | `auto_increment_column` | No | Output name enabling raw ingestion: adds a `BIGINT` row number 1..N per version and `_crm_analytics_version_id`; their pair becomes the destination key. Preserves duplicate/null business keys. Requires a new target or explicit migration. |
 | `supported_scope` | Yes | Exactly `scalar_full_visibility`. This is your attestation that the chosen projection has supported scalar values and stable full row visibility; it is not proof derived automatically from Salesforce. |
 | `scope_fingerprint` | Yes | Nonblank, stable, operator-managed identifier for the approved principal/visibility scope; at most 1,024 characters. Do not use a token, run ID, or capture timestamp. Changes require an approved new baseline, not inferred deletions against an old target. |
+| `expected_snapshot_fingerprint` | Internal | Pipeline-supplied SHA-256 metadata guard for independent Spark schema/read instances. Add to the connection allowlist when using version skipping; do not set manually. |
 | `version_id` | No | Exact 15- or 18-character dataset-version ID. Otherwise current version is resolved once per table context. Explicitly pin it across independent schema/read contexts. |
 | `column_name_mode` | No | `readable` (default) or `legacy_hex`. Case-insensitive collisions fail. Preserve `legacy_hex` for existing hex-named targets; changing modes requires migration. |
 | `selected_columns` | No | Nonempty JSON array of distinct source physical names, including all business keys. Remove this option to read all physical columns; `["*"]` and an empty array are unsupported. Order is immaterial; changing selection requires migration. |
@@ -434,7 +485,7 @@ and an explicit projection (use only fields present in your dataset):
 Use only keys actually present in that dataset's XMD. Add another table entry
 for each additional dataset, with its own approved keys and visibility scope.
 Keep credentials in the named connection. A fixed `version_id` intentionally
-rereads the same version; orchestration must resolve and propagate a new pin
+selects the same version; orchestration must resolve and propagate a new pin
 for each new capture if the goal is to follow dataset refreshes. Validate the
 selected environment's managed-ingestion configuration separately; this JSON
 is not a direct managed ingestion API request.
@@ -446,8 +497,9 @@ multi-page read and a refreshed version. Verify full row/key/value equality,
 not just the first page or a sample. Then schedule triggered captures at a
 cadence that fits source refresh times, query cost, and org-specific quotas.
 
-Each scheduled capture still reads a full snapshot. An unchanged version does
-not skip extraction in the stock reader. A true empty snapshot can remove all
+By default, each scheduled capture reads a full snapshot, even for an unchanged
+version. The optional [workspace callback](#skip-unchanged-published-versions)
+skips extraction when Lakeflow has already committed the same snapshot identity. A true empty snapshot can remove all
 previous rows through snapshot comparison; permission failures and partial
 results must never be substituted for empty data. Preserve the integration
 identity and approved visibility scope between runs.

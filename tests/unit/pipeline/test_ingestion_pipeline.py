@@ -36,10 +36,11 @@ def reset_mocks():
     """Reset all mocks before each test."""
     mock_sdp.reset_mock()
     mock_sdp.view = MagicMock(side_effect=lambda name: lambda f: f)
+    mock_sdp.temporary_view = MagicMock(side_effect=lambda name: lambda f: f)
     mock_sdp.append_flow = MagicMock(side_effect=lambda name, target: lambda f: f)
     mock_sdp.create_streaming_table = MagicMock()
     mock_sdp.apply_changes = MagicMock()
-    mock_sdp.apply_changes_from_snapshot = MagicMock()
+    mock_sdp.create_auto_cdc_from_snapshot_flow = MagicMock()
     yield
 
 
@@ -368,8 +369,8 @@ class TestIngestSnapshot:
             # Verify streaming table was created
             mock_sdp.create_streaming_table.assert_called_once_with(name="orders")
 
-            # Verify apply_changes_from_snapshot was called
-            mock_sdp.apply_changes_from_snapshot.assert_called_once_with(
+            # Verify create_auto_cdc_from_snapshot_flow was called
+            mock_sdp.create_auto_cdc_from_snapshot_flow.assert_called_once_with(
                 target="orders",
                 source="source_orders_snapshot",
                 keys=["order_id"],
@@ -377,7 +378,7 @@ class TestIngestSnapshot:
             )
 
             # Verify view was created
-            mock_sdp.view.assert_called_once_with(name="source_orders_snapshot")
+            mock_sdp.temporary_view.assert_called_once_with(name="source_orders_snapshot")
 
     def test_snapshot_ingestion_with_scd_type_2(self, mock_spark, base_metadata):
         """Test snapshot ingestion with SCD Type 2."""
@@ -402,7 +403,7 @@ class TestIngestSnapshot:
             ingest(mock_spark, spec)
 
             # Verify SCD Type 2 is passed
-            call_kwargs = mock_sdp.apply_changes_from_snapshot.call_args[1]
+            call_kwargs = mock_sdp.create_auto_cdc_from_snapshot_flow.call_args[1]
             assert call_kwargs["stored_as_scd_type"] == "2"
 
 
@@ -442,7 +443,7 @@ class TestIngestAppend:
 
             # Verify apply_changes was NOT called
             mock_sdp.apply_changes.assert_not_called()
-            mock_sdp.apply_changes_from_snapshot.assert_not_called()
+            mock_sdp.create_auto_cdc_from_snapshot_flow.assert_not_called()
 
     def test_append_ingestion_from_scd_type_append_only(self, mock_spark, base_metadata):
         """Test that APPEND_ONLY scd_type overrides ingestion_type to append."""
@@ -527,8 +528,8 @@ class TestIngestMultipleTables:
             assert mock_sdp.apply_changes.call_count == 3
 
             # Verify snapshot was called for orders
-            mock_sdp.apply_changes_from_snapshot.assert_called_once()
-            assert mock_sdp.apply_changes_from_snapshot.call_args[1]["target"] == "orders"
+            mock_sdp.create_auto_cdc_from_snapshot_flow.assert_called_once()
+            assert mock_sdp.create_auto_cdc_from_snapshot_flow.call_args[1]["target"] == "orders"
 
             # Verify append_flow was called for events
             mock_sdp.append_flow.assert_called_once()
@@ -572,7 +573,7 @@ class TestIngestMultipleTables:
             assert apply_changes_kwargs["stored_as_scd_type"] == "2"
 
             # Verify orders table called with SCD_TYPE_1
-            snapshot_kwargs = mock_sdp.apply_changes_from_snapshot.call_args[1]
+            snapshot_kwargs = mock_sdp.create_auto_cdc_from_snapshot_flow.call_args[1]
             assert snapshot_kwargs["target"] == "orders"
             assert snapshot_kwargs["stored_as_scd_type"] == "1"
 
@@ -757,7 +758,7 @@ class TestMetadataOverride:
 
             # Verify CDC was used (apply_changes called)
             mock_sdp.apply_changes.assert_called_once()
-            mock_sdp.apply_changes_from_snapshot.assert_not_called()
+            mock_sdp.create_auto_cdc_from_snapshot_flow.assert_not_called()
             mock_sdp.append_flow.assert_not_called()
 
 
@@ -794,9 +795,7 @@ class TestDestinationTable:
             call_kwargs = mock_sdp.apply_changes.call_args[1]
             assert call_kwargs["target"] == "`my_catalog`.`my_schema`.`my_users`"
 
-    def test_destination_table_defaults_to_source_table(
-        self, mock_spark, base_metadata
-    ):
+    def test_destination_table_defaults_to_source_table(self, mock_spark, base_metadata):
         """Test that destination table defaults to source table name when not specified."""
         spec = {
             "connection_name": "test_connection",
@@ -1045,7 +1044,7 @@ class TestTableConfigFiltering:
 
             return decorator
 
-        mock_sdp.view = MagicMock(side_effect=capture_view)
+        mock_sdp.temporary_view = MagicMock(side_effect=capture_view)
 
         mock_spark = MagicMock()
 
@@ -1322,3 +1321,131 @@ class TestClusterBy:
             passed_options = options_call.call_args[1]
             assert passed_options == {"regular_option": "value"}
             assert "cluster_by" not in passed_options
+
+
+class TestSkipUnchangedVersions:
+    def test_callback_pins_and_skips_without_loading_empty_snapshot(
+        self, mock_spark, base_metadata
+    ):
+        metadata = {
+            **base_metadata["orders"],
+            "snapshot_version": "version-z",
+            "snapshot_fingerprint": "a" * 64,
+        }
+        spec = {
+            "connection_name": "test",
+            "objects": [
+                {
+                    "table": {
+                        "source_table": "orders",
+                        "table_configuration": {"skip_unchanged_versions": True},
+                    }
+                }
+            ],
+        }
+        with patch(
+            "databricks.labs.community_connector.pipeline.ingestion_pipeline._get_table_metadata",
+            return_value={"orders": metadata},
+        ):
+            ingest(mock_spark, spec)
+        callback = mock_sdp.create_auto_cdc_from_snapshot_flow.call_args.kwargs["source"]
+        assert callable(callback)
+        mock_spark.read.format.assert_not_called()
+        mock_sdp.temporary_view.assert_not_called()
+        _, sequence = callback(None)
+        options = (
+            mock_spark.read.format.return_value.option.return_value.option.return_value.options
+        )
+        options.assert_called_once_with(
+            version_id="version-z", expected_snapshot_fingerprint="a" * 64
+        )
+        assert callback(sequence) is None
+        assert mock_spark.read.format.call_count == 1
+
+    @pytest.mark.parametrize("table", ["users", "events", "contacts"])
+    def test_reject_non_snapshot_flow(self, table, mock_spark, base_metadata):
+        spec = {
+            "connection_name": "test",
+            "objects": [
+                {
+                    "table": {
+                        "source_table": table,
+                        "table_configuration": {"skip_unchanged_versions": True},
+                    }
+                }
+            ],
+        }
+        with patch(
+            "databricks.labs.community_connector.pipeline.ingestion_pipeline._get_table_metadata",
+            return_value=base_metadata,
+        ):
+            with pytest.raises(ValueError, match="only for snapshot"):
+                ingest(mock_spark, spec)
+        mock_sdp.create_streaming_table.assert_not_called()
+
+    def test_unsupported_reader_fails_before_defining_target(self, mock_spark, base_metadata):
+        spec = {
+            "connection_name": "test",
+            "objects": [
+                {
+                    "table": {
+                        "source_table": "orders",
+                        "table_configuration": {"skip_unchanged_versions": True},
+                    }
+                }
+            ],
+        }
+        with patch(
+            "databricks.labs.community_connector.pipeline.ingestion_pipeline._get_table_metadata",
+            return_value=base_metadata,
+        ):
+            with pytest.raises(ValueError, match="requires snapshot_version"):
+                ingest(mock_spark, spec)
+        mock_sdp.create_streaming_table.assert_not_called()
+
+
+def test_metadata_transport_preserves_version_identity():
+    from databricks.labs.community_connector.pipeline.ingestion_pipeline import _get_table_metadata
+
+    spark = MagicMock()
+    rows = [
+        {
+            "tableName": "fixture",
+            "primary_keys": ["id"],
+            "cursor_field": None,
+            "ingestion_type": "snapshot",
+            "snapshot_version": "opaque",
+            "snapshot_fingerprint": "a" * 64,
+        }
+    ]
+    spark.read.format.return_value.option.return_value.option.return_value.option.return_value.option.return_value.load.return_value.collect.return_value = (
+        rows
+    )
+    assert _get_table_metadata(spark, "test", ["fixture"], {}) == {
+        "fixture": {
+            "primary_keys": ["id"],
+            "ingestion_type": "snapshot",
+            "snapshot_version": "opaque",
+            "snapshot_fingerprint": "a" * 64,
+        }
+    }
+
+
+def test_older_metadata_transport_still_supports_default_snapshot():
+    from databricks.labs.community_connector.pipeline.ingestion_pipeline import _get_table_metadata
+
+    spark = MagicMock()
+    rows = [
+        {
+            "tableName": "fixture",
+            "primary_keys": ["id"],
+            "cursor_field": None,
+            "ingestion_type": "snapshot",
+        }
+    ]
+    spark.read.format.return_value.option.return_value.option.return_value.option.return_value.option.return_value.load.return_value.collect.return_value = (
+        rows
+    )
+    assert _get_table_metadata(spark, "test", ["fixture"], {}) == {
+        "fixture": {"primary_keys": ["id"], "ingestion_type": "snapshot"}
+    }

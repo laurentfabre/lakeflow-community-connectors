@@ -5,6 +5,7 @@ from typing import List, Optional
 from pyspark import pipelines as sdp
 from pyspark.sql.functions import col, expr
 from databricks.labs.community_connector.libs.spec_parser import SpecParser
+from databricks.labs.community_connector.pipeline.snapshot_versions import versioned_snapshot_source
 
 
 @dataclass
@@ -20,6 +21,8 @@ class SdpTableConfig:  # pylint: disable=too-many-instance-attributes
     scd_type: str
     with_deletes: bool = False
     cluster_by: Optional[List[str]] = field(default=None)
+    skip_unchanged_versions: bool = False
+    snapshot_metadata: Optional[dict] = None
 
 
 def _create_streaming_table(config: SdpTableConfig) -> None:
@@ -35,9 +38,7 @@ def _build_view_name(source_table: str, flow_type: str) -> str:
     return f"source_{source_table}_{flow_type}"
 
 
-def _create_cdc_table(
-    spark, connection_name: str, config: SdpTableConfig
-) -> None:
+def _create_cdc_table(spark, connection_name: str, config: SdpTableConfig) -> None:
     """Create CDC table using streaming and apply_changes"""
 
     @sdp.view(name=config.view_name)
@@ -84,23 +85,48 @@ def _create_cdc_table(
         )
 
 
-def _create_snapshot_table(spark, connection_name: str, config: SdpTableConfig) -> None:
-    """Create snapshot table using batch read and apply_changes_from_snapshot"""
-
-    @sdp.view(name=config.view_name)
-    def snapshot_view():
-        return (
-            spark.read.format("lakeflow_connect")
-            .option("databricks.connection", connection_name)
-            .option("tableName", config.source_table)
-            .options(**config.table_config)
-            .load()
+def _read_snapshot(spark, connection_name: str, config: SdpTableConfig):
+    """Read one full snapshot; optional version/fingerprint pin spans Spark instances."""
+    options = dict(config.table_config)
+    if config.skip_unchanged_versions:
+        options.update(
+            version_id=config.snapshot_metadata["snapshot_version"],
+            expected_snapshot_fingerprint=config.snapshot_metadata["snapshot_fingerprint"],
         )
+    return (
+        spark.read.format("lakeflow_connect")
+        .option("databricks.connection", connection_name)
+        .option("tableName", config.source_table)
+        .options(**options)
+        .load()
+    )
+
+
+def _create_snapshot_table(spark, connection_name: str, config: SdpTableConfig) -> None:
+    """Compare full snapshots, optionally skipping committed versions via Lakeflow."""
+    source = config.view_name
+    if config.skip_unchanged_versions:
+        source = versioned_snapshot_source(
+            config.snapshot_metadata,
+            {
+                "connection": connection_name,
+                "source_table": config.source_table,
+                "destination": config.destination_table,
+                "primary_keys": config.primary_keys,
+                "scd_type": config.scd_type,
+            },
+            lambda: _read_snapshot(spark, connection_name, config),
+        )
+    else:
+
+        @sdp.temporary_view(name=config.view_name)
+        def snapshot_view():
+            return _read_snapshot(spark, connection_name, config)
 
     _create_streaming_table(config)
-    sdp.apply_changes_from_snapshot(
+    sdp.create_auto_cdc_from_snapshot_flow(
         target=config.destination_table,
-        source=config.view_name,
+        source=source,
         keys=config.primary_keys,
         stored_as_scd_type=config.scd_type,
     )
@@ -147,6 +173,13 @@ def _get_table_metadata(
             table_metadata["cursor_field"] = row["cursor_field"]
         if row["ingestion_type"] is not None:
             table_metadata["ingestion_type"] = row["ingestion_type"]
+        for key in ("snapshot_version", "snapshot_fingerprint"):
+            try:
+                value = row[key]
+            except (KeyError, ValueError):
+                value = None  # Older deployed readers have no version metadata.
+            if value is not None:
+                table_metadata[key] = value
         metadata[row["tableName"]] = table_metadata
     return metadata
 
@@ -180,6 +213,9 @@ def ingest(spark, pipeline_spec: dict) -> None:
         if scd_type_raw == "APPEND_ONLY":
             ingestion_type = "append"
         scd_type = "2" if scd_type_raw == "SCD_TYPE_2" else "1"
+        skip_unchanged = spec.get_skip_unchanged_versions(table)
+        if skip_unchanged and ingestion_type != "snapshot":
+            raise ValueError("skip_unchanged_versions is supported only for snapshot ingestion")
 
         flow_type_map = {
             "cdc": "upsert",
@@ -199,14 +235,12 @@ def ingest(spark, pipeline_spec: dict) -> None:
             scd_type=scd_type,
             with_deletes=(ingestion_type == "cdc_with_deletes"),
             cluster_by=cluster_by,
+            skip_unchanged_versions=skip_unchanged,
+            snapshot_metadata=metadata[table],
         )
 
         if ingestion_type in ("cdc", "cdc_with_deletes"):
-            _create_cdc_table(
-                spark,
-                connection_name,
-                config
-            )
+            _create_cdc_table(spark, connection_name, config)
         elif ingestion_type == "snapshot":
             _create_snapshot_table(spark, connection_name, config)
         elif ingestion_type == "append":

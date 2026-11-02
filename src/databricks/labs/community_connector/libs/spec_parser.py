@@ -12,13 +12,13 @@ from pydantic import (
     field_validator,
 )
 
-
 # Special table configuration options shared by all sources,
 # These options will not get injected into the source.
 SCD_TYPE = "scd_type"
 PRIMARY_KEYS = "primary_keys"
 SEQUENCE_BY = "sequence_by"
 CLUSTER_BY = "cluster_by"
+SKIP_UNCHANGED_VERSIONS = "skip_unchanged_versions"
 
 # Valid SCD type values
 SCD_TYPE_1 = "SCD_TYPE_1"
@@ -187,7 +187,8 @@ class SpecParser:
 
         Returns:
             A dictionary mapping each source table name to its configuration.
-            Each configuration excludes special keys: scd_type, primary_keys, sequence_by.
+            Each configuration excludes framework controls such as SCD type, keys,
+            and version skipping.
         """
         return {
             table_name: self.get_table_configuration(table_name)
@@ -198,18 +199,31 @@ class SpecParser:
         """
         Return the configuration for a specific table.
 
-        Excludes special keys: scd_type, primary_keys, sequence_by.
+        Excludes framework controls: scd_type, primary_keys, sequence_by, cluster_by,
+        and skip_unchanged_versions.
         Use dedicated methods to retrieve these values.
 
         Returns:
             A dictionary containing the table configuration without special keys.
         """
-        special_keys = {SCD_TYPE, PRIMARY_KEYS, SEQUENCE_BY, CLUSTER_BY}
+        special_keys = {SCD_TYPE, PRIMARY_KEYS, SEQUENCE_BY, CLUSTER_BY, SKIP_UNCHANGED_VERSIONS}
         for obj in self._model.objects:
             if obj.table.source_table == table_name:
                 config = obj.table.table_configuration or {}
                 return {k: v for k, v in config.items() if k not in special_keys}
         return {}
+
+    def get_skip_unchanged_versions(self, table_name: str) -> bool:
+        """Return the opt-in checkpointed snapshot control; reject ambiguous values."""
+        for obj in self._model.objects:
+            if obj.table.source_table == table_name:
+                value = (obj.table.table_configuration or {}).get(SKIP_UNCHANGED_VERSIONS)
+                if value is None:
+                    return False
+                if value.lower() not in ("true", "false"):
+                    raise ValueError("skip_unchanged_versions must be true or false")
+                return value.lower() == "true"
+        return False
 
     def get_scd_type(self, table_name: str) -> Optional[str]:
         """

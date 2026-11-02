@@ -105,7 +105,7 @@ connection:
 # Complete connector table-option contract. Do not place these options in the
 # connection parameters. Framework/connection transport (including source_name)
 # is ignored by the connector and is not a dataset filter or table option.
-external_options_allowlist: "source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,auto_increment_column,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds"
+external_options_allowlist: "source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,auto_increment_column,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds,expected_snapshot_fingerprint"
 
 # Table option documentation (all values are transported as strings):
 # source_primary_keys (required unless auto_increment_column is set): JSON array
@@ -173,7 +173,14 @@ external_options_allowlist: "source_primary_keys,primary_keys,version_id,support
 # Destination keys use the same mapping as columns. Original source names remain
 # available in schema metadata/column_mapping; readable names need that metadata
 # for reversal. Naming-mode changes are schema/scope migrations, not cosmetic.
-# Every read returns a complete snapshot (even for an unchanged version).
+# expected_snapshot_fingerprint (internal optional): SHA-256 of the resolved pin.
+#   Supplied by the workspace pipeline callback; changed metadata fails before SAQL.
+# skip_unchanged_versions is a workspace framework control, NOT a source option:
+#   table_configuration true/false, default false. The framework strips it before
+#   source calls. Requires an updated framework/source and new target or explicit
+#   checkpoint migration. Not implemented by managed ingestion_definition.
+# Every executed read returns a complete snapshot. The optional workspace
+# callback skips unchanged committed snapshots by returning None, not empty data.
 # No source-native CDC, arbitrary filters, or implicit complete empty snapshots.
 # Immutable Bronze manifests and ordered Silver replay belong to separate
 # applications, not this connection specification or connector wheel.

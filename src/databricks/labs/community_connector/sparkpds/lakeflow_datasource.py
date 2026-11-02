@@ -374,6 +374,8 @@ class LakeflowSource(DataSource):
                     StructField("primary_keys", ArrayType(StringType()), True),
                     StructField("cursor_field", StringType(), True),
                     StructField("ingestion_type", StringType(), True),
+                    StructField("snapshot_version", StringType(), True),
+                    StructField("snapshot_fingerprint", StringType(), True),
                 ]
             )
         if table == NAMESPACES_TABLE:

@@ -1,7 +1,7 @@
 # CRM Analytics framework integration
 
-Status: source implementation, offline contracts and a targeted same-version
-live pipeline smoke test; updated 2026-10-30. See [validation](validation.md).
+Status: source implementation, offline contracts, a targeted same-version source
+smoke test and synthetic snapshot-callback runtime checks; updated 2026-11-02. See [validation](validation.md).
 Framework baseline: `ddc153b9741b686759ad85f25d2d45ca8a6ac24b`.
 
 ## Connector responsibility
@@ -16,12 +16,49 @@ The framework's Python batch reader invokes `read_table(..., None, ...)` once
 and ignores the returned offset. All pages must be consumed inside the iterator.
 A prefix is not a complete snapshot; exceptions during extraction must fail the
 read. A no-change result is not an empty source: an unchanged version is read in
-full. Independent schema/read instances must receive the same explicit `version_id`.
+full unless the optional pipeline callback skips the read entirely. Independent schema/read instances must receive the same explicit `version_id`.
 
-The shared workspace pipeline already uses `apply_changes_from_snapshot` to
+The shared workspace pipeline uses `create_auto_cdc_from_snapshot_flow` to
 maintain the destination from full snapshots. No extra archive is required merely
 to use that path. Managed ingestion and real Spark/Delta failure atomicity still
 require validation on the chosen runtime; Python unit tests do not prove them.
+
+## Checkpointed version skipping
+
+`table_configuration.skip_unchanged_versions=true` enables the snapshot callback
+in the repository's workspace `ingest()` path. The spec parser validates a boolean
+and removes it from source options. CDC/append flows and readers without snapshot
+metadata fail rather than silently ignoring it. Direct batch reads and managed
+`ingestion_definition` pipelines retain their existing behavior.
+
+CRM Analytics metadata exposes `snapshot_version` and `snapshot_fingerprint` as
+nullable string columns in `_community_table_metadata`. The fingerprint hashes
+the complete pin, including schema, security, scope, source origin/API, projection,
+keys and generated identity. Token-expiry metadata and operational budgets do not
+change it. The callback pins `version_id` and `expected_snapshot_fingerprint` on
+Spark reads; independent connector instances reject a changed pin before SAQL.
+Add the latter internal option to the connection's external allowlist and redeploy
+both framework and generated source. Never maintain a last-success flag inside
+a reader or declare completion merely because the callback returned a DataFrame.
+
+The callback receives Lakeflow's last processed sequence. The sequence is a fixed
+20-digit increasing ordinal plus a SHA-256 identity suffix. Source version IDs
+are opaque and compared only for equality. Identity also includes the connection,
+target, primary keys and SCD type. A matching identity returns `None`, not an empty
+DataFrame; a changed identity returns the full pinned snapshot and the next
+sequence. Metadata is resolved once per pipeline update, so a refresh during that
+update is picked up on the next update. Lakeflow owns checkpoint persistence,
+flow serialization and recovery. In SCD Type 2, `__START_AT` / `__END_AT` contain
+these ordered string sequences, not source timestamps. An extraction/application failure must not be
+turned into a successful snapshot. A new invocation with the preceding checkpoint
+still returns the snapshot; unchanged callbacks perform no extraction.
+
+Use a new target when enabling this mode on an existing flow, or perform an
+explicit checkpoint migration. Legacy numeric/unrecognized checkpoints fail
+before source reads. Do not clear production checkpoints as an automatic fallback.
+A full refresh requires separate authorization. Fingerprint drift forces a new
+read but does not authorize schema/key/visibility migrations or imply source
+immutability. See the README example and [validation](validation.md) for test scope.
 
 ## Keys, naming and scope
 

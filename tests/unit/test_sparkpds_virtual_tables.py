@@ -344,3 +344,13 @@ def test_partitions_skips_fanout_for_virtual_tables():
         parts = reader.partitions()
         assert len(parts) == 1
         assert parts[0].value is None
+
+
+def test_snapshot_metadata_schema_is_optional_for_existing_connectors():
+    schema = _source_schema(_FlatConnector({}), METADATA_TABLE)
+    assert schema["snapshot_version"].dataType == StringType()
+    assert schema["snapshot_fingerprint"].dataType == StringType()
+    assert schema["snapshot_version"].nullable and schema["snapshot_fingerprint"].nullable
+    reader = _reader(_FlatConnector({}), METADATA_TABLE, tableNameList='["t1"]')
+    reader.schema = schema
+    assert list(reader.read(None)) == [("t1", None, None, None, None, None)]

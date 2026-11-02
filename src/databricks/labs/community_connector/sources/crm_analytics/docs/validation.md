@@ -1,12 +1,57 @@
 # CRM Analytics validation status
 
-Updated: 2026-10-30. **Offline contracts plus targeted runtime smoke;
+Updated: 2026-11-02. **Offline contracts plus targeted runtime checks;
 not production certification.**
 
 Framework baseline: `ddc153b9741b686759ad85f25d2d45ca8a6ac24b`.
 Local environment: Python 3.12.13, PySpark 4.2.0, pytest 8.4.2.
 The original offline baseline used no Java runtime, Salesforce organization or
 Databricks workspace. The separate live smoke below has narrower, stated scope.
+
+## Version skipping: synthetic Lakeflow runtime — 2026-11-02
+
+The actual framework wheel ran in an isolated serverless Lakeflow pipeline with
+SCD Type 1 and SCD Type 2 targets. A synthetic adapter supplied snapshot metadata
+and DataFrames; it replaced only metadata discovery and the source-read helper.
+The deployed `ingest()`, spec parser, version callback and native snapshot CDC
+were the implementation under test. No Salesforce connection or customer data
+was used in these runtime cases.
+
+Eleven normal updates (no full refresh) produced nine completions and two
+intentional failures. Read-only SQL checked both complete targets after each
+scenario:
+
+- Initial snapshot populated both targets. An unchanged update succeeded with
+  the read helper configured to throw if invoked, proving extraction was skipped.
+- A new source ID sorted before the previous ID still applied inserts, updates
+  and deletions, with prior SCD Type 2 values retained.
+- An injected error during lazy DataFrame execution failed the update and left
+  both targets unchanged. Retrying that version succeeded; the next unchanged
+  update again succeeded with reads forbidden.
+- A changed metadata fingerprint for the same version invoked the read helper
+  and failed when reads were forbidden, preserving the old targets. Its retry
+  succeeded. The next unchanged update skipped, even though the changed
+  fingerprint's snapshot contained the same row values as before.
+- A validated empty snapshot cleared the current-state target and closed all
+  current history rows. Repeating it with reads forbidden succeeded and left
+  both targets unchanged.
+
+Local suites passed **624 tests with 2 expected skips**: 467 source/registry/
+virtual-table tests, 111 parser/pipeline tests, and 46 CLI spec tests. Added
+contracts cover retry without acknowledgment, missing/incompatible checkpoints,
+ordinal ordering/overflow, metadata transport, unsupported ingestion modes,
+source metadata changes and pre-query pin rejection. The real connector plus
+HTTP simulator also completed a read/skip/refresh/read/skip sequence, observing
+only metadata GETs on skipped versions. HTML JSON examples, matching allowlists,
+27-capability search/filter, anchors, responsive widths and JavaScript checks
+passed in the dedicated browser sandbox.
+
+These are targeted platform and simulated-source results. They do not establish
+credentialed Salesforce version transitions, UC injection of the new internal
+option, all-column source fidelity, or a customer checkpoint migration. Deploy
+both framework and source, update the connection allowlist, and use a new target
+or explicitly migrate the checkpoint before enabling the flag. Same-version
+value changes without metadata drift cannot be detected by a metadata-only probe.
 
 ## Targeted live pipeline smoke — 2026-10-30
 
