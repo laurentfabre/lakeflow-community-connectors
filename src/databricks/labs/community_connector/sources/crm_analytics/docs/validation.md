@@ -281,3 +281,48 @@ an explicit zero count is accepted; an empty aggregate array is rejected.
 Case/Unicode fixtures test the chosen synthetic order, not Salesforce collation.
 Benchmark actual SAQL query cost and offsets before claiming volume support; no
 quadratic physical cost or generally usable binary bulk-export path is established.
+
+## Operational upgrades — 2 November 2026
+
+Added read-only UC-backed health/discovery/field inspection, explicit strict or
+additive schema baselines, exact SQLite-backed business-key validation, generated
+key counters, extraction planning/metrics, and an offline configuration assistant.
+
+The connector suite now has 562 passing cases and two existing skips, including
+126 new operational cases. Coverage includes sanitized HTTP 401/403/404/429
+reports, missing allowlist entries, metadata-only plans, optional count probes,
+malformed baselines, schema/key/security/scope migration rejection before row
+queries, and diagnostic option propagation through Spark wrappers.
+
+SQLite tests exercise exact composite/Unicode keys, cross-page duplicates,
+private file permissions, cleanup on completion/error/iterator close, storage
+failures without completion evidence, and generated mode avoiding a key store.
+A synthetic 10,007-row extraction crosses offset 10,000 and validates 11 data
+pages, one terminal page and two count queries (14 total). This demonstrates
+local pagination and validation behavior; it does not benchmark Salesforce cost,
+collation, quotas, capacity or freshness.
+
+The source, snapshot callback, parser and CLI spec/publication checks pass in
+one group. Existing ingestion-pipeline tests pass separately because they
+replace PySpark modules globally at collection time. Across these selected
+checks: 730 passed, two existing skips. The connector wheel builds successfully;
+an isolated wheel installation exercises both modular and registered merged
+readers with SQLite validation and a strict baseline.
+
+The offline assistant passed seven browser scenarios in a dedicated Chrome
+sandbox: required metadata, raw projection/visibility attestation, downloads and
+stale-output invalidation, strict keys/SQLite/version pins, strict/additive
+baselines and scope checks, mobile layout, and malformed metadata rejection.
+There were no browser script errors or network requests. Run the browser suite
+with a Playwright Python environment and the existing sandbox session file:
+
+```bash
+python tests/browser/crm_analytics_setup.py
+```
+
+These new features remain offline-tested. Customer live validation is pending
+Salesforce connection reauthorization and the current full connection allowlist.
+Target propagation of accepted schema additions and representative source-scale
+benchmarks still require the intended Databricks/Salesforce environment.
+No target DDL, checkpoint reset, full refresh or customer-table migration was
+performed for these upgrades.

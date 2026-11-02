@@ -105,7 +105,24 @@ connection:
 # Complete connector table-option contract. Do not place these options in the
 # connection parameters. Framework/connection transport (including source_name)
 # is ignored by the connector and is not a dataset filter or table option.
-external_options_allowlist: "source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,auto_increment_column,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds,expected_snapshot_fingerprint"
+external_options_allowlist: "source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,auto_increment_column,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds,expected_snapshot_fingerprint,key_validation_mode,key_validation_cache_kib,schema_baseline,schema_evolution_mode,diagnostic_action,diagnostic_dataset_id,diagnostic_table_options,diagnostic_check_count"
+
+# Optional operational controls:
+# key_validation_mode: memory (default) or sqlite for exact local disk-backed
+#   validation of strict business keys. Generated version/row keys use a counter.
+# key_validation_cache_kib: SQLite page cache budget 64..65536, default 8192.
+#   Temporary files contain key values, are private, and are removed on iterator
+#   completion/error/close. This does not bound response or process memory.
+# schema_baseline: approved JSON object exported by schema_baseline(pin) or
+#   preflight; never automatically acknowledge/advance a baseline.
+# schema_evolution_mode: strict (default with baseline), or additive for nullable
+#   physical additions only. Mode requires a baseline. Incompatible changes
+#   fail before row queries. Target schema support still needs validation.
+# diagnostic_*: read-only _crm_analytics_diagnostics virtual table controls.
+#   diagnostic_action: health (default), discover, inspect.
+#   diagnostic_dataset_id: dataset ID, required for inspect.
+#   diagnostic_table_options: JSON object with source/framework settings to check.
+#   diagnostic_check_count: true/false, default false; optional single count query.
 
 # Table option documentation (all values are transported as strings):
 # source_primary_keys (required unless auto_increment_column is set): JSON array

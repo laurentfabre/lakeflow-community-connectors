@@ -22,6 +22,20 @@ import requests
 from pyspark.sql.types import DecimalType, LongType, StringType, StructField, StructType
 
 from databricks.labs.community_connector.interface import LakeflowConnect
+from databricks.labs.community_connector.sources.crm_analytics.crm_analytics_operations import (
+    DIAGNOSTICS_TABLE,
+    diagnostic_report,
+    inspect_dataset,
+    preflight,
+)
+from databricks.labs.community_connector.sources.crm_analytics.crm_analytics_schema import (
+    enforce_schema_policy,
+    validate_schema_baseline,
+)
+from databricks.labs.community_connector.sources.crm_analytics.crm_analytics_performance import (
+    _KeyValidator,
+    extraction_plan,
+)
 from databricks.labs.community_connector.sources.crm_analytics.crm_analytics_support import (
     CrmAnalyticsError,
     _ReadBudget,
@@ -225,17 +239,26 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                 status = response.status_code
                 if status == 401:
                     raise CrmAnalyticsError(
-                        "CRM Analytics authentication expired or invalid; renew the injected token externally"
+                        "CRM Analytics authentication expired or invalid; renew the injected token externally",
+                        code="AUTHENTICATION",
                     )
                 if status not in _RETRY_STATUSES:
                     if status != 200:
-                        raise CrmAnalyticsError(f"CRM Analytics HTTP {status}; snapshot aborted")
+                        raise CrmAnalyticsError(
+                            f"CRM Analytics HTTP {status}; snapshot aborted",
+                            code={403: "PERMISSION_DENIED", 404: "RESOURCE_NOT_FOUND"}.get(
+                                status, "SOURCE_HTTP_ERROR"
+                            ),
+                        )
                     body = _response_body(response)
                     if budget is not None:
                         budget.remaining()
                     return body
                 if attempt == self._retries:
-                    raise CrmAnalyticsError(f"CRM Analytics HTTP {status} after bounded retries")
+                    raise CrmAnalyticsError(
+                        f"CRM Analytics HTTP {status} after bounded retries",
+                        code="RATE_LIMITED" if status == 429 else "SOURCE_UNAVAILABLE",
+                    )
             finally:
                 session.cookies.clear()
                 if response is not None:
@@ -374,9 +397,24 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
             "max_query_requests",
             "max_read_seconds",
             "expected_snapshot_fingerprint",
+            "schema_baseline",
+            "schema_evolution_mode",
+            "key_validation_mode",
+            "key_validation_cache_kib",
         }
-        if set(options) - allowed:
-            raise CrmAnalyticsError("Unknown table option; filters and row caps are not supported")
+        unknown = set(options) - allowed
+        if unknown:
+            names = json.dumps([name[:128] for name in sorted(unknown)[:10]], ensure_ascii=True)
+            raise CrmAnalyticsError(
+                f"Unknown table option(s): {names}; filters and row caps are not supported"
+            )
+        if "schema_evolution_mode" in options and "schema_baseline" not in options:
+            raise CrmAnalyticsError("schema_evolution_mode requires an approved schema_baseline")
+        if "schema_baseline" in options:
+            options["schema_baseline"] = validate_schema_baseline(options["schema_baseline"])
+            options.setdefault("schema_evolution_mode", "strict")
+            if options["schema_evolution_mode"] not in ("strict", "additive"):
+                raise CrmAnalyticsError("schema_evolution_mode must be strict or additive")
         expected = options.get("expected_snapshot_fingerprint")
         if expected is not None and (
             not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected)
@@ -444,6 +482,16 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
             options.get("decimal_scale", "18"), "decimal_scale", 0, precision
         )
         options["max_keys"] = _integer(options.get("max_keys", "1000000"), "max_keys", 1, 10000000)
+        validation_mode = options.get("key_validation_mode", "memory")
+        if validation_mode not in ("memory", "sqlite"):
+            raise CrmAnalyticsError("key_validation_mode must be memory or sqlite")
+        options["key_validation_mode"] = validation_mode
+        options["key_validation_cache_kib"] = _integer(
+            options.get("key_validation_cache_kib", "8192"),
+            "key_validation_cache_kib",
+            64,
+            65536,
+        )
         options["max_query_requests"] = _integer(
             options.get("max_query_requests", "2000"), "max_query_requests", 1, 100000
         )
@@ -710,6 +758,15 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                     auto_increment_column=auto_column,
                     key_mode="version_row_number",
                 )
+            if "schema_baseline" in options:
+                descriptor["configuration_fingerprint"] = _fingerprint(
+                    {
+                        "source_configuration": descriptor["configuration_fingerprint"],
+                        "schema_baseline": options["schema_baseline"],
+                        "schema_evolution_mode": options["schema_evolution_mode"],
+                    }
+                )
+            enforce_schema_policy(descriptor, options)
             self._contexts[key] = {"descriptor": descriptor, "options": options, "kinds": kinds}
         context = self._contexts[key]
         if expected_fingerprint is not None and (
@@ -729,7 +786,30 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
         return json.loads(json.dumps(context["descriptor"]))
 
     def get_table_schema(self, table_name: str, table_options: dict[str, str]) -> StructType:
+        if table_name == DIAGNOSTICS_TABLE:
+            return StructType([StructField("report", StringType(), False)])
         return StructType.fromJson(self.pin_table(table_name, table_options)["schema_json"])
+
+    def check_connection(self, table_name=None, table_options=None, *, check_count=False) -> dict:
+        """Read-only preflight with actionable, credential-free diagnostic output."""
+        return preflight(
+            self,
+            table_name,
+            table_options,
+            connection_metadata=self.options,
+            check_count=check_count,
+        )
+
+    def inspect_dataset(self, table_name: str, *, column_name_mode="readable") -> dict:
+        """Return metadata-only field previews; key suggestions are unverified."""
+        return inspect_dataset(self, table_name, column_name_mode=column_name_mode)
+
+    def get_extraction_plan(self, table_name: str, table_options: dict[str, str]) -> dict:
+        return extraction_plan(
+            self.pin_table(table_name, table_options),
+            self._table_options(table_options),
+            self._page_size,
+        )
 
     def describe_snapshot(self, table_name: str, table_options: dict[str, str]) -> dict:
         """Archival adapter descriptor; does not mark a snapshot complete.
@@ -935,6 +1015,14 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
         started_at = time.monotonic()
         if start_offset is not None and start_offset != {}:
             raise CrmAnalyticsError("Snapshot reads do not accept incremental offsets")
+        if table_name == DIAGNOSTICS_TABLE:
+
+            def report_rows():
+                yield {
+                    "report": json.dumps(diagnostic_report(self, table_options), ensure_ascii=True)
+                }
+
+            return report_rows(), None
         budget = _ReadBudget(started_at, self._table_options(table_options))
         key, context = self._context(table_name, table_options, budget=budget)
         self._evidence.pop(key, None)
@@ -950,7 +1038,12 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
             )
         # Two count probes and the terminal empty page are mandatory, even for
         # an empty snapshot. This is a lower bound: retries consume more calls.
-        minimum_queries = (expected + self._page_size - 1) // self._page_size + 3
+        plan = extraction_plan(
+            descriptor,
+            {**options, "max_query_requests": budget.max_query_requests},
+            self._page_size,
+        )
+        minimum_queries = plan["minimum_query_requests"]
         if minimum_queries > budget.max_query_requests:
             raise CrmAnalyticsError(
                 "Snapshot requires more than max_query_requests; increase explicitly"
@@ -969,33 +1062,45 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
         def iterate():
             check_read()
             before = self._count(load, expected, budget=budget)
-            seen = set()
             offset = 0
-            while True:
+            page_queries = 0
+            peak_page_rows = 0
+            with _KeyValidator(
+                options["key_validation_mode"],
+                options["key_validation_cache_kib"],
+                generated=bool(options.get("auto_increment_column")),
+            ) as keys:
+                while True:
+                    check_read()
+                    rows = self._query(
+                        query + f" q = offset q {offset}; q = limit q {self._page_size};",
+                        budget=budget,
+                    )
+                    page_queries += 1
+                    peak_page_rows = max(peak_page_rows, len(rows))
+                    if len(rows) != min(self._page_size, expected - offset):
+                        raise CrmAnalyticsError("Incomplete or overlarge snapshot page")
+                    if offset == expected:
+                        # The exact-length check above requires the terminal
+                        # page to be empty; a nonempty terminal page fails.
+                        break
+                    for index, row in enumerate(rows, start=offset + 1):
+                        check_read()
+                        converted, row_key = self._convert_row(row, context, row_number=index)
+                        keys.add(row_key)
+                        check_read()
+                        yield converted
+                        check_read()
+                    offset += len(rows)
+                after = self._count(load, expected, budget=budget)
+                self._revalidate(descriptor, options, budget)
                 check_read()
-                rows = self._query(
-                    query + f" q = offset q {offset}; q = limit q {self._page_size};",
-                    budget=budget,
-                )
-                if len(rows) != min(self._page_size, expected - offset):
-                    raise CrmAnalyticsError("Incomplete or overlarge snapshot page")
-                if offset == expected:
-                    # The exact-length check above requires the terminal page
-                    # to be empty; a nonempty terminal page already failed.
-                    break
-                for index, row in enumerate(rows, start=offset + 1):
-                    check_read()
-                    converted, row_key = self._convert_row(row, context, row_number=index)
-                    if row_key in seen:
-                        raise CrmAnalyticsError("Null or duplicate primary key in snapshot")
-                    seen.add(row_key)
-                    check_read()
-                    yield converted
-                    check_read()
-                offset += len(rows)
-            after = self._count(load, expected, budget=budget)
-            self._revalidate(descriptor, options, budget)
+                unique_key_count = keys.count
+                key_storage = keys.mode
+            # A cleanup failure must not leave successful completion evidence.
             check_read()
+            metrics = budget.metrics()
+            elapsed = metrics["elapsed_seconds"]
             self._evidence[key] = {
                 "dataset_id": name,
                 "version_id": version_id,
@@ -1003,16 +1108,25 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                 "visible_count_before": before,
                 "visible_count_after": after,
                 "extracted_row_count": offset,
-                "unique_key_count": len(seen),
+                "unique_key_count": unique_key_count,
                 "terminal_empty_page": True,
                 "metadata_revalidated": True,
                 "scope_fingerprint": options["scope_fingerprint"],
+                "key_validation_storage": key_storage,
+                "key_validation_cache_kib": (
+                    options["key_validation_cache_kib"] if key_storage == "sqlite" else None
+                ),
+                "minimum_query_requests": minimum_queries,
+                "page_queries": page_queries,
+                "data_pages": page_queries - 1,
+                "peak_page_rows": peak_page_rows,
+                "rows_per_second": offset / elapsed if elapsed > 0 else None,
                 **(
                     {"key_mode": "version_row_number", "source_keys_validated": False}
                     if options.get("auto_increment_column")
                     else {}
                 ),
-                **budget.metrics(),
+                **metrics,
             }
 
         return iterate(), None

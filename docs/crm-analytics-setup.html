@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="description" content="Build a CRM Analytics workspace pipeline configuration from a local metadata inspection report.">
+  <title>CRM Analytics · Guided setup</title>
+  <style>
+    :root{--ink:#152c35;--muted:#52676f;--paper:#fff;--canvas:#f5f7f7;--line:#dce5e6;--teal:#006b68;--soft:#e7f3f1;--red:#943c36;--amber:#765112;--code:#112a33}
+    *{box-sizing:border-box}body{margin:0;background:var(--canvas);color:var(--ink);font:16px/1.6 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1160px;margin:auto;padding:30px 28px 64px}a{color:var(--teal);text-underline-offset:3px}h1{font-size:clamp(32px,5vw,52px);line-height:1.12;letter-spacing:-.04em;margin:18px 0}h2{font-size:24px;line-height:1.3;margin:0 0 14px}p{margin:12px 0}header{margin-bottom:28px}.eyebrow{font-size:12px;font-weight:750;letter-spacing:.13em;text-transform:uppercase;color:var(--teal)}.lead,.hint{color:var(--muted)}.lead{font-size:18px;max-width:800px}.hint{font-size:13px}.card{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:26px;margin:22px 0}.step{color:var(--teal);font-size:13px;display:block;margin-bottom:8px;font-weight:750}.callout{padding:15px 18px;background:var(--soft);border-left:4px solid var(--teal);border-radius:0 8px 8px 0;margin:16px 0}.warning{color:var(--amber);background:#fff4dd;border-color:#a76f10}.error{color:var(--red);background:#fcece9;border-color:var(--red)}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px 24px}label{display:block;font-size:14px;font-weight:650}input:not([type=checkbox],[type=radio]),select{width:100%;padding:9px 11px;border:1px solid #91a7ad;background:#fff;border-radius:6px;color:var(--ink);font:inherit;margin-top:5px}input[type=file]{font-size:14px!important}input[type=checkbox],input[type=radio]{width:18px;height:18px;vertical-align:middle;accent-color:var(--teal);flex-shrink:0}input:disabled,select:disabled{background:#eef1f2!important;color:var(--muted)}.check{display:flex;align-items:flex-start;gap:9px;margin:12px 0;font-weight:450}.check input{margin-top:4px}.wide{grid-column:1/-1}fieldset{border:1px solid var(--line);border-radius:8px;margin:20px 0;padding:14px 18px}legend{padding:0 7px;font-size:15px;font-weight:700}.actions{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}button{padding:9px 16px;font:inherit;font-size:14px;font-weight:650;border:1px solid var(--teal);border-radius:6px;background:var(--teal);color:#fff;cursor:pointer}button.secondary{background:#fff;color:var(--teal)}button:disabled{background:#e6ebec;border-color:#d0dadc;color:#697a80;cursor:default}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid #007e83;outline-offset:3px}code{font: .85em ui-monospace,SFMono-Regular,Consolas,monospace;background:#eaf0f1;padding:2px 4px;border-radius:4px;overflow-wrap:anywhere}pre{overflow:auto;background:var(--code);color:#e6f2f3;border-radius:8px;padding:20px;font-size:13px;line-height:1.65;margin:16px 0;max-height:560px}pre code{font:inherit;background:transparent;color:inherit;padding:0;white-space:pre}.table-wrap{overflow:auto;max-height:500px;border:1px solid var(--line);border-radius:8px;margin:16px 0}table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}caption{text-align:left;padding:12px;color:var(--muted)}th,td{padding:10px 12px;border-top:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}thead th{background:#edf2f3;position:sticky;top:0}td:first-child,td:nth-child(2){text-align:center}.status{font-size:13px;color:var(--muted);overflow-wrap:anywhere}.pill{display:inline-block;padding:2px 7px;border-radius:4px;background:var(--soft);color:var(--teal);font-size:11px;font-weight:700}.pill.no{background:#eef1f2;color:var(--muted)}details{margin:18px 0}summary{cursor:pointer;font-weight:650}footer{padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}[hidden]{display:none!important}.skip{position:absolute;top:-60px;left:20px;padding:8px;background:white}.skip:focus{top:8px}
+    @media(max-width:700px){main{padding:22px 16px 42px}.card{padding:20px 16px}.grid{grid-template-columns:1fr}.wide{grid-column:auto}th,td{padding:8px}pre{font-size:12px;padding:14px}button{flex-grow:1}.table-wrap table{min-width:620px}}
+  </style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to setup</a>
+<main id="main">
+  <header>
+    <a href="crm-analytics.html">← Connector guide</a>
+    <p class="eyebrow">Salesforce → Databricks · Guided configuration</p>
+    <h1>Prepare your CRM Analytics pipeline.</h1>
+    <p class="lead">Inspect a dataset in Databricks, choose its fields and ingestion keys, then download a workspace pipeline specification for review.</p>
+    <p class="hint">This page works offline. Imported files stay in this page's memory; it makes no network requests and stores nothing in your browser. OAuth credentials remain in the Unity Catalog connection.</p>
+  </header>
+  <noscript><p class="callout warning">Enable JavaScript to use this setup assistant. The <a href="crm-analytics.html#pipeline">connector guide</a> includes manual configuration instructions.</p></noscript>
+  <section class="card" aria-labelledby="inspection-title">
+    <span class="step">01 / Inspect and import</span>
+    <h2 id="inspection-title">Use the dataset's physical fields</h2>
+    <p>In a Databricks notebook with the updated connector installed, run this metadata inspection using your existing connection. Substitute the dataset ID and connection name:</p>
+    <pre><code>from databricks.labs.community_connector import register
+from databricks.labs.community_connector.sources.crm_analytics.crm_analytics_setup import run_diagnostics
+
+register(spark, "crm_analytics")
+spark.conf.set("spark.databricks.unityCatalog.connectionDfOptionInjection.enabled", "true")
+report = run_diagnostics(
+    spark,
+    connection_name="crm-analytics",
+    action="inspect",
+    dataset_id="&lt;15-or-18-character-dataset-id&gt;",
+)
+
+import json
+print(json.dumps(report, indent=2))</code></pre>
+    <p class="hint">Save the JSON result as a local <code>.json</code> file and import it below. Inspection reads metadata, without extracting dataset rows. Metadata alone cannot prove scalar values, full visibility, or unique business keys.</p>
+    <label for="inspection-file">Inspection report JSON<input id="inspection-file" type="file" accept=".json,application/json" aria-describedby="inspection-status"></label>
+    <p id="inspection-status" class="status" role="status" aria-live="polite">No inspection report loaded.</p>
+    <div id="inspection-error" class="callout error" role="alert" hidden></div>
+  </section>
+  <form id="setup-form" novalidate>
+    <section class="card" aria-labelledby="fields-title">
+      <span class="step">02 / Choose columns and keys</span>
+      <h2 id="fields-title">Preserve raw rows or validate business keys</h2>
+      <p id="dataset-summary" class="status">Import an inspection report to view fields.</p>
+      <fieldset>
+        <legend>Ingestion keys</legend>
+        <label class="check"><input type="radio" name="key-mode" id="key-mode-raw" value="raw" checked><span>Preserve all raw rows using a generated row number for each dataset version.</span></label>
+        <label class="check"><input type="radio" name="key-mode" id="key-mode-strict" value="strict"><span>Validate unique, non-null business keys. Select one or more string fields in the Key column.</span></label>
+        <label for="auto-increment-column">Generated row number column<input id="auto-increment-column" value="_ingestion_row_id" maxlength="128" autocomplete="off"></label>
+        <p class="hint">The generated row number and <code>_crm_analytics_version_id</code> form the technical key. These keys preserve duplicate business rows; they do not identify the same business entity across versions. Use a new destination or explicitly migrate an existing key contract.</p>
+      </fieldset>
+      <p id="suggestions" class="hint">Key suggestions will appear after inspection. Suggestions are unproven and are never selected automatically.</p>
+      <div class="actions"><button id="select-supported" class="secondary" type="button" disabled>Select supported fields</button><button id="clear-fields" class="secondary" type="button" disabled>Clear field selection</button></div>
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Physical field selection">
+        <table><caption id="field-count">No fields loaded</caption><thead><tr><th scope="col">Include</th><th scope="col">Key</th><th scope="col">Physical source field</th><th scope="col">Destination / type</th><th scope="col">Availability</th></tr></thead><tbody id="field-body"></tbody></table>
+      </div>
+      <p class="hint">All supported fields start selected. When every field is supported and selected, the specification omits <code>selected_columns</code> to read all physical fields. Otherwise it lists the selected physical names explicitly. Unsupported fields remain excluded.</p>
+    </section>
+    <section class="card" aria-labelledby="configuration-title">
+      <span class="step">03 / Configure the destination</span>
+      <h2 id="configuration-title">Choose an approved visibility scope</h2>
+      <div class="grid">
+        <label for="connection-name">Unity Catalog connection<input id="connection-name" value="crm-analytics" maxlength="255" autocomplete="off" required></label>
+        <label for="destination-catalog">Destination catalog<input id="destination-catalog" placeholder="main" maxlength="255" autocomplete="off" required></label>
+        <label for="destination-schema">Destination schema<input id="destination-schema" placeholder="crm_analytics" maxlength="255" autocomplete="off" required></label>
+        <label for="destination-table">Destination table<input id="destination-table" value="crm_analytics_raw" maxlength="255" autocomplete="off" required></label>
+        <label for="scope-fingerprint" class="wide">Approved scope fingerprint<input id="scope-fingerprint" placeholder="integration-user-full-visibility-v1" maxlength="1024" autocomplete="off" required></label>
+      </div>
+      <p class="hint">Choose a stable identifier for the approved integration identity and row-visibility contract. A scope change requires a new baseline decision.</p>
+      <label class="check"><input id="visibility-attestation" type="checkbox"><span>I have verified that the selected fields have supported scalar values and this integration user can read the complete intended row population.</span></label>
+      <label class="check"><input id="pin-version" type="checkbox"><span>Pin the version from this inspection. Leave unchecked to resolve the latest published version on each update.</span></label>
+      <label class="check"><input id="skip-unchanged" type="checkbox" checked><span>Skip a version already committed with matching metadata and scope.</span></label>
+      <p class="hint">Version skipping uses the repository's workspace pipeline. New versions still require full extraction. It requires the updated framework and reader plus <code>expected_snapshot_fingerprint</code> in the connection allowlist.</p>
+      <fieldset>
+        <legend>Key validation storage</legend>
+        <div class="grid">
+          <label for="key-validation-mode">Business key storage<select id="key-validation-mode"><option value="memory">Memory</option><option value="sqlite">Local SQLite index</option></select></label>
+          <label for="key-validation-cache-kib">SQLite page cache (KiB)<input id="key-validation-cache-kib" type="number" min="64" max="65536" step="1" value="8192" disabled></label>
+        </div>
+        <p class="hint">Generated row keys use a counter without retaining a key set. SQLite limits the business-key index page cache; it does not bound the entire process or remove API limits. Temporary key storage contains source key values and is cleaned when the read completes, fails, or is closed.</p>
+      </fieldset>
+      <details>
+        <summary>Optional approved schema baseline</summary>
+        <p class="hint">Import a baseline exported from a reviewed preflight report. It must match this dataset, scope, naming mode, projection, and keys. A baseline is not created or approved automatically here.</p>
+        <label for="baseline-file">Schema baseline JSON<input id="baseline-file" type="file" accept=".json,application/json"></label>
+        <p id="baseline-status" class="status" role="status" aria-live="polite">No schema baseline configured.</p>
+        <div class="actions"><button id="clear-baseline" class="secondary" type="button" disabled>Remove baseline</button></div>
+        <label for="schema-evolution-mode">Evolution policy<select id="schema-evolution-mode" disabled><option value="strict">Strict — require an unchanged schema</option><option value="additive">Additive — permit compatible nullable additions</option></select></label>
+        <p class="hint">Removed or changed columns, keys, mappings, and security remain breaking changes. Review target schema support before accepting additions. The assistant never changes a target table or checkpoint.</p>
+      </details>
+    </section>
+    <section class="card" aria-labelledby="review-title">
+      <span class="step">04 / Review and export</span>
+      <h2 id="review-title">Generate a workspace pipeline specification</h2>
+      <p>Run preflight in the intended workspace before deployment. Review the connection allowlist, extraction plan, migration report, and target configuration. This assistant prepares configuration; it does not deploy or certify the dataset.</p>
+      <div id="configuration-error" class="callout error" role="alert" hidden></div>
+      <div class="actions"><button id="generate-spec" type="submit">Generate specification</button><button id="copy-spec" type="button" class="secondary" disabled>Copy JSON</button><button id="download-spec" type="button" class="secondary" disabled>Download JSON</button></div>
+      <p id="output-status" class="status" role="status" aria-live="polite">Complete the setup and generate a specification for review.</p>
+      <pre id="spec-output" tabindex="0" aria-label="Generated pipeline specification">No specification generated.</pre>
+    </section>
+  </form>
+  <footer>CRM Analytics community connector · <a href="crm-analytics.html#authentication">OAuth and connection setup</a> · <a href="crm-analytics.html#operations">Operation and sizing guidance</a></footer>
+</main>
+<script>
+(() => {
+  'use strict';
+  const el = id => document.getElementById(id);
+  const idPattern = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
+  const generatedPattern = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+  const destinationPattern = /^[A-Za-z_][A-Za-z0-9_-]{0,254}$/;
+  const maxFileBytes = 1024 * 1024;
+  const baselineKeys = ['format_version','schema_json','dataset_id','primary_keys','source_primary_keys','column_name_mode','column_mapping','scope_fingerprint','security_fingerprint','auto_increment_column'];
+  let inspection = null, baseline = null, generated = null, inspectionLoad = 0, baselineLoad = 0;
+  const fieldControls = new Map();
+  const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const uniqueStrings = value => Array.isArray(value) && value.every(n => typeof n === 'string' && n.length > 0) && new Set(value).size === value.length;
+  const sameSet = (left, right) => left.length === right.length && left.every(name => right.includes(name));
+  const sameList = (left, right) => left.length === right.length && left.every((name,index) => name === right[index]);
+  const safeSource = value => typeof value === 'string' && value.length > 0 && new TextEncoder().encode(value).length <= 1024 && !/[\u0000-\u001f'\\;]/u.test(value) && !/[\uD800-\uDFFF]/u.test(Array.from(value).filter(c => c.length === 1).join(''));
+  function encodedName(name, mode) {
+    if (mode === 'legacy_hex') return 'c_' + Array.from(new TextEncoder().encode(name), b => b.toString(16).padStart(2,'0')).join('');
+    let mapped = Array.from(name, char => /^[A-Za-z0-9_]$/.test(char) ? char : char === '.' ? '__' : '_u' + char.codePointAt(0).toString(16).padStart(4,'0') + '_').join('');
+    return /^[0-9]/.test(mapped) || mapped.toLowerCase() === 'none' ? 'c_' + mapped : mapped;
+  }
+  function message(id, text) { el(id).textContent = text; el(id).hidden = !text; }
+  function invalidate() {
+    generated = null;
+    el('copy-spec').disabled = true; el('download-spec').disabled = true;
+    el('spec-output').textContent = 'No current specification. Generate again after configuration changes.';
+    el('output-status').textContent = 'Configuration changed. Generate a new specification for review.';
+    message('configuration-error','');
+  }
+  function validateInspection(raw) {
+    if (!object(raw) || raw.format_version !== 1 || raw.kind !== 'crm_analytics_inspection' || !idPattern.test(raw.dataset_id) || !idPattern.test(raw.version_id)) throw new Error('Import a version 1 CRM Analytics inspection report with valid dataset and version IDs.');
+    if (!Array.isArray(raw.columns) || raw.columns.length === 0 || raw.columns.length > 10000) throw new Error('The report must contain between 1 and 10,000 field entries.');
+    const mode = raw.column_name_mode === undefined ? 'readable' : raw.column_name_mode;
+    if (!['readable','legacy_hex'].includes(mode)) throw new Error('The inspection naming mode is unsupported.');
+    const names = new Set(), destinations = new Set();
+    const columns = raw.columns.map(column => {
+      if (!object(column) || typeof column.source_name !== 'string' || !column.source_name || names.has(column.source_name) || typeof column.supported !== 'boolean') throw new Error('The report contains malformed or duplicate source field entries.');
+      names.add(column.source_name);
+      const item = {source_name:column.source_name, destination_name:column.destination_name, type:column.type, supported:column.supported, reason:typeof column.reason === 'string' ? column.reason : '', label:typeof column.label === 'string' ? column.label : ''};
+      if (item.supported) {
+        if (!safeSource(item.source_name) || typeof item.type !== 'string' || !/^(?:string|long|bigint|decimal\([0-9]{1,2},[0-9]{1,2}\))$/.test(item.type)) throw new Error('A supported field has an unsafe name or unsupported scalar type. Reinspect the dataset.');
+        if (typeof item.destination_name !== 'string' || item.destination_name !== encodedName(item.source_name,mode)) throw new Error('A supported destination name does not match the connector naming contract.');
+        const folded = item.destination_name.toLowerCase();
+        if (destinations.has(folded)) throw new Error('Selectable fields have colliding destination names. Reinspect using an approved projection or naming mode.');
+        destinations.add(folded);
+      }
+      return item;
+    });
+    if (!columns.some(c => c.supported)) throw new Error('This report has no supported selectable fields.');
+    const decimalTypes = new Set(columns.filter(c => c.supported && c.type.startsWith('decimal(')).map(c => c.type));
+    if (decimalTypes.size > 1) throw new Error('The inspection contains inconsistent decimal contracts. Reinspect with one precision and scale.');
+    const decimal = decimalTypes.size ? [...decimalTypes][0].match(/^decimal\(([0-9]+),([0-9]+)\)$/) : null;
+    const precision = raw.decimal_precision === undefined ? (decimal ? Number(decimal[1]) : 38) : raw.decimal_precision;
+    const scale = raw.decimal_scale === undefined ? (decimal ? Number(decimal[2]) : 18) : raw.decimal_scale;
+    if (!Number.isInteger(precision) || precision < 1 || precision > 38 || !Number.isInteger(scale) || scale < 0 || scale > precision || (decimal && (precision !== Number(decimal[1]) || scale !== Number(decimal[2])))) throw new Error('The inspection contains an invalid or inconsistent decimal precision/scale.');
+    const suggestions = Array.isArray(raw.key_suggestions) ? raw.key_suggestions.filter(name => columns.some(c => c.supported && c.type === 'string' && c.source_name === name)) : [];
+    return {format_version:1,kind:raw.kind,dataset_id:raw.dataset_id,version_id:raw.version_id,column_name_mode:mode,decimal_precision:precision,decimal_scale:scale,columns,key_suggestions:[...new Set(suggestions)]};
+  }
+  function validateBaseline(raw) {
+    if (!object(raw) || !sameSet(Object.keys(raw),baselineKeys) || raw.format_version !== 1 || !idPattern.test(raw.dataset_id) || !['readable','legacy_hex'].includes(raw.column_name_mode) || typeof raw.scope_fingerprint !== 'string' || !raw.scope_fingerprint.trim() || !/^[0-9a-f]{64}$/.test(raw.security_fingerprint)) throw new Error('Import the complete approved schema baseline object, with no extra properties.');
+    if (!uniqueStrings(raw.primary_keys) || !raw.primary_keys.length || !uniqueStrings(raw.source_primary_keys) || !object(raw.column_mapping) || !Object.keys(raw.column_mapping).length || !object(raw.schema_json) || !sameSet(Object.keys(raw.schema_json),['type','fields']) || raw.schema_json.type !== 'struct' || !Array.isArray(raw.schema_json.fields) || !raw.schema_json.fields.length) throw new Error('The baseline is missing its schema, mapping, or key contract.');
+    const fields = raw.schema_json.fields, names = fields.map(field => field.name);
+    if (new Set(names.map(name => typeof name === 'string' ? name.toLowerCase() : '')).size !== fields.length || fields.some(field => !object(field) || !sameSet(Object.keys(field),['name','type','nullable','metadata']) || typeof field.name !== 'string' || !field.name || typeof field.type !== 'string' || !/^(?:string|long|decimal\([0-9]{1,2},[0-9]{1,2}\))$/.test(field.type) || typeof field.nullable !== 'boolean' || !object(field.metadata) || Object.keys(field.metadata).some(key => !['source_name','crm_analytics_generated'].includes(key)))) throw new Error('The baseline contains malformed scalar schema fields or unsupported field metadata.');
+    if (!raw.primary_keys.every(name => names.includes(name)) || !raw.source_primary_keys.every(name => Object.hasOwn(raw.column_mapping,name))) throw new Error('Baseline keys are absent from its schema or source mapping.');
+    for (const [source,target] of Object.entries(raw.column_mapping)) if (!safeSource(source) || typeof target !== 'string' || target !== encodedName(source,raw.column_name_mode) || !names.includes(target)) throw new Error('Baseline source mapping does not match the connector naming contract.');
+    if (raw.auto_increment_column !== null && (typeof raw.auto_increment_column !== 'string' || !generatedPattern.test(raw.auto_increment_column))) throw new Error('The baseline generated column is invalid.');
+    return raw;
+  }
+  function updateFieldState() {
+    const strict = el('key-mode-strict').checked;
+    el('auto-increment-column').disabled = strict;
+    fieldControls.forEach(({column,include,key}) => {
+      key.disabled = !column.supported || (strict && column.type !== 'string');
+      if (key.disabled) key.checked = false;
+      if (key.checked) include.checked = true;
+    });
+    if (inspection) el('field-count').textContent = [...fieldControls.values()].filter(item => item.include.checked).length + ' of ' + inspection.columns.length + ' fields selected';
+  }
+  function renderFields() {
+    fieldControls.clear(); el('field-body').replaceChildren();
+    if (!inspection) {el('dataset-summary').textContent='Import an inspection report to view fields.';el('field-count').textContent='No fields loaded';return;}
+    el('dataset-summary').textContent = 'Dataset ' + inspection.dataset_id + ' · Inspected version ' + inspection.version_id + ' · Naming: ' + inspection.column_name_mode;
+    inspection.columns.forEach((column,index) => {
+      const row = document.createElement('tr');
+      const include = document.createElement('input'); include.type='checkbox';include.id='field-include-'+index;include.checked=column.supported;include.disabled=!column.supported;include.setAttribute('aria-label','Include '+column.source_name);
+      const key = document.createElement('input');key.type='checkbox';key.id='field-key-'+index;key.setAttribute('aria-label','Use '+column.source_name+' as a source key');
+      const includeCell=document.createElement('td');includeCell.append(include);const keyCell=document.createElement('td');keyCell.append(key);row.append(includeCell,keyCell);
+      const nameCell=document.createElement('th');nameCell.scope='row';nameCell.textContent=column.source_name;row.append(nameCell);
+      const typeCell=document.createElement('td');typeCell.textContent=(typeof column.destination_name==='string'?column.destination_name:'Unavailable')+' / '+(typeof column.type==='string'?column.type:'Unsupported');row.append(typeCell);
+      const statusCell=document.createElement('td');const status=document.createElement('span');status.className='pill'+(column.supported?'':' no');status.textContent=column.supported?'Supported':'Excluded';statusCell.append(status);if(column.reason){const note=document.createElement('div');note.textContent=column.reason;statusCell.append(note);}row.append(statusCell);el('field-body').append(row);
+      fieldControls.set(column.source_name,{column,include,key});
+      include.addEventListener('change',()=>{if(!include.checked)key.checked=false;updateFieldState();invalidate();});
+      key.addEventListener('change',()=>{if(key.checked)include.checked=true;updateFieldState();invalidate();});
+    });
+    el('suggestions').textContent=inspection.key_suggestions.length?'Suggested string keys (not proven unique/non-null): '+inspection.key_suggestions.join(', ')+'. Review them before selecting.':'No string key suggestions. Choose keys only after checking the actual dataset grain and values.';
+    updateFieldState();
+  }
+  async function readJson(file) {
+    if (!file || file.size > maxFileBytes) throw new Error('Choose a JSON file no larger than 1 MiB.');
+    try { return JSON.parse(await file.text()); } catch (_) { throw new Error('The selected file is not valid JSON.'); }
+  }
+  el('inspection-file').addEventListener('change',async()=>{
+    const serial=++inspectionLoad;inspection=null;renderFields();invalidate();message('inspection-error','');el('select-supported').disabled=true;el('clear-fields').disabled=true;
+    try {const candidate=validateInspection(await readJson(el('inspection-file').files[0]));if(serial!==inspectionLoad)return;inspection=candidate;renderFields();el('select-supported').disabled=false;el('clear-fields').disabled=false;el('inspection-status').textContent='Inspection loaded. Review the supported fields and visibility contract.';}
+    catch(error){if(serial===inspectionLoad){el('inspection-status').textContent='Inspection was not loaded.';message('inspection-error',error.message);}}
+  });
+  el('baseline-file').addEventListener('change',async()=>{
+    const serial=++baselineLoad;baseline=null;el('schema-evolution-mode').disabled=true;el('clear-baseline').disabled=true;invalidate();
+    try {const candidate=validateBaseline(await readJson(el('baseline-file').files[0]));if(serial!==baselineLoad)return;baseline=candidate;el('baseline-status').textContent='Baseline loaded for dataset '+baseline.dataset_id+'. Its contract will be checked against your selections.';el('schema-evolution-mode').disabled=false;el('clear-baseline').disabled=false;}
+    catch(error){if(serial===baselineLoad)el('baseline-status').textContent=error.message;}
+  });
+  el('clear-baseline').addEventListener('click',()=>{++baselineLoad;baseline=null;el('baseline-file').value='';el('baseline-status').textContent='No schema baseline configured.';el('schema-evolution-mode').disabled=true;el('clear-baseline').disabled=true;invalidate();});
+  el('select-supported').addEventListener('click',()=>{fieldControls.forEach(item=>{item.include.checked=item.column.supported;});updateFieldState();invalidate();});
+  el('clear-fields').addEventListener('click',()=>{fieldControls.forEach(item=>{item.include.checked=false;item.key.checked=false;});updateFieldState();invalidate();});
+  el('setup-form').addEventListener('input',event=>{if(event.target.type!=='file'){updateFieldState();el('key-validation-cache-kib').disabled=el('key-validation-mode').value!=='sqlite';invalidate();}});
+  el('setup-form').addEventListener('change',event=>{if(event.target.type!=='file'){updateFieldState();el('key-validation-cache-kib').disabled=el('key-validation-mode').value!=='sqlite';invalidate();}});
+  function buildSpec() {
+    if(!inspection)throw new Error('Import a valid inspection report first.');
+    const required=(id,label)=>{const value=el(id).value.trim();if(!value||/[\u0000-\u001f]/u.test(value))throw new Error(label+' must be nonempty and contain no control characters.');return value;};
+    const connection=required('connection-name','Connection name');
+    const catalog=required('destination-catalog','Destination catalog'),schema=required('destination-schema','Destination schema'),table=required('destination-table','Destination table');
+    for(const [label,value] of [['Catalog',catalog],['Schema',schema],['Table',table]])if(!destinationPattern.test(value))throw new Error(label+' must start with a letter or underscore and contain only letters, digits, underscores, or hyphens (maximum 255 characters).');
+    const scope=required('scope-fingerprint','Scope fingerprint');if(scope.length>1024)throw new Error('Scope fingerprint must be at most 1,024 characters.');
+    if(!el('visibility-attestation').checked)throw new Error('Verify supported scalar values and full row visibility, then confirm the visibility checkbox.');
+    const selected=[...fieldControls.values()].filter(item=>item.include.checked).map(item=>item.column.source_name).sort();
+    const keys=[...fieldControls.values()].filter(item=>item.key.checked).map(item=>item.column.source_name).sort();
+    if(!selected.length)throw new Error('Select at least one supported physical field.');
+    if(!keys.every(key=>selected.includes(key)))throw new Error('Every source key must also be included in the selected fields.');
+    const config={supported_scope:'scalar_full_visibility',scope_fingerprint:scope,column_name_mode:inspection.column_name_mode,decimal_precision:inspection.decimal_precision,decimal_scale:inspection.decimal_scale,skip_unchanged_versions:el('skip-unchanged').checked,key_validation_mode:el('key-validation-mode').value};
+    if(el('key-mode-raw').checked){const name=el('auto-increment-column').value.trim();if(!generatedPattern.test(name)||name.toLowerCase()==='_crm_analytics_version_id')throw new Error('Generated column must be an ASCII identifier of 1–128 characters and differ from _crm_analytics_version_id.');const destinations=selected.map(name=>fieldControls.get(name).column.destination_name.toLowerCase());if(destinations.includes(name.toLowerCase())||destinations.includes('_crm_analytics_version_id'))throw new Error('A generated column collides with a selected physical destination name. Change the generated name or selection.');config.auto_increment_column=name;}
+    else if(!keys.length||keys.some(name=>fieldControls.get(name).column.type!=='string'))throw new Error('Strict business-key mode requires one or more selected string fields as keys.');
+    if(keys.length)config.source_primary_keys=keys;
+    if(selected.length!==inspection.columns.length||inspection.columns.some(column=>!column.supported))config.selected_columns=selected;
+    if(el('pin-version').checked)config.version_id=inspection.version_id;
+    if(config.key_validation_mode==='sqlite'){const value=Number(el('key-validation-cache-kib').value);if(!Number.isInteger(value)||value<64||value>65536)throw new Error('SQLite page cache must be an integer from 64 to 65,536 KiB.');config.key_validation_cache_kib=value;}
+    if(baseline){
+      if(baseline.dataset_id!==inspection.dataset_id||baseline.column_name_mode!==inspection.column_name_mode||baseline.scope_fingerprint!==scope||(baseline.auto_increment_column||null)!==(config.auto_increment_column||null))throw new Error('Baseline dataset, naming mode, scope, or generated-key mode does not match this configuration.');
+      const baselineFields=Object.keys(baseline.column_mapping), additive=el('schema-evolution-mode').value==='additive';
+      if(!baselineFields.every(name=>selected.includes(name))||(!additive&&!sameSet(baselineFields,selected)))throw new Error('Baseline projection differs from the selected fields. Preserve every baseline field; additive mode permits extra fields for preflight review.');
+      if(!sameSet(baseline.source_primary_keys,keys))throw new Error('Baseline source keys differ from the selected keys. Select the approved keys or review a new baseline.');
+      for(const name of baselineFields){const column=fieldControls.get(name).column;const field=baseline.schema_json.fields.find(field=>field.name===baseline.column_mapping[name]);const type=column.type==='bigint'?'long':column.type;if(!field||field.name!==column.destination_name||field.type!==type||field.nullable!==true||field.metadata.source_name!==name)throw new Error('A baseline field type, nullability, or mapping changed. Run preflight for a migration report before configuring this dataset.');}
+      const approvedKeys=baseline.auto_increment_column?['_crm_analytics_version_id',baseline.auto_increment_column]:baseline.source_primary_keys.map(name=>baseline.column_mapping[name]);
+      if(!sameList(baseline.primary_keys,approvedKeys))throw new Error('The baseline primary keys do not match its source or generated-key contract.');
+      if(baseline.source_primary_keys.length)config.source_primary_keys=[...baseline.source_primary_keys];
+      config.schema_baseline=baseline;config.schema_evolution_mode=el('schema-evolution-mode').value;
+    }
+    return {connection_name:connection,objects:[{table:{source_table:inspection.dataset_id,destination_catalog:catalog,destination_schema:schema,destination_table:table,table_configuration:config}}]};
+  }
+  el('setup-form').addEventListener('submit',event=>{event.preventDefault();invalidate();try{generated=JSON.stringify(buildSpec(),null,2)+'\n';el('spec-output').textContent=generated;el('copy-spec').disabled=false;el('download-spec').disabled=false;el('output-status').textContent='Specification prepared for the repository workspace pipeline. Run preflight and review before deployment.';}catch(error){message('configuration-error',error.message);el('output-status').textContent='Resolve the setup issue, then generate again.';el('configuration-error').scrollIntoView({block:'nearest'});}});
+  el('copy-spec').addEventListener('click',async()=>{if(!generated)return;try{if(!navigator.clipboard)throw new Error();await navigator.clipboard.writeText(generated);el('output-status').textContent='Specification copied.';}catch(_){const range=document.createRange();range.selectNodeContents(el('spec-output'));const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);el('output-status').textContent='Specification selected. Use your browser Copy command.';}});
+  el('download-spec').addEventListener('click',()=>{if(!generated)return;const url=URL.createObjectURL(new Blob([generated],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download='crm-analytics-pipeline-spec.json';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);el('output-status').textContent='Specification downloaded. Review it and run workspace preflight before deployment.';});
+})();
+</script>
+</body>
+</html>

@@ -65,7 +65,7 @@ pipeline specification. Never put credentials in source code or fixtures.
 Set `externalOptionsAllowList` to:
 
 ```text
-source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,auto_increment_column,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds,expected_snapshot_fingerprint
+source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,auto_increment_column,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds,expected_snapshot_fingerprint,key_validation_mode,key_validation_cache_kib,schema_baseline,schema_evolution_mode,diagnostic_action,diagnostic_dataset_id,diagnostic_table_options,diagnostic_check_count
 ```
 
 These table options belong under each table's `table_configuration`, not in the
@@ -167,6 +167,124 @@ caps. Supported scalar values for the chosen projection and stable full row
 visibility must be established by the operator; runtime checks cannot detect
 every multivalue or equal-count permission change. Column selection changes only
 the projection, never row visibility or the completeness checks.
+
+### Connection checks and guided configuration
+
+Deploy the updated source/generated reader and use the complete connection
+allowlist above, including the `diagnostic_*` options. Existing OAuth connections
+may require reauthorization to update their allowlist. Keep the same Salesforce
+integration user and approved visibility scope.
+
+Run these commands in a Databricks notebook using the existing UC connection;
+no access token belongs in the notebook or generated pipeline specification:
+
+```python
+from databricks.labs.community_connector import register
+from databricks.labs.community_connector.sources.crm_analytics.crm_analytics_setup import (
+    run_diagnostics, validate_pipeline,
+)
+
+register(spark, "crm_analytics")
+spark.conf.set("spark.databricks.unityCatalog.connectionDfOptionInjection.enabled", "true")
+
+# Read-only authentication/permission check and dataset discovery.
+discovery = run_diagnostics(spark, connection_name="crm-analytics", action="discover")
+
+# Physical field names/types; suggestions do not establish key uniqueness.
+inspection = run_diagnostics(
+    spark, connection_name="crm-analytics", action="inspect", dataset_id="<DATASET_ID>"
+)
+```
+
+Export the inspection result as JSON and open the
+[offline setup assistant](../../../../../../docs/crm-analytics-setup.html).
+Import the report to preview fields, choose columns and ingestion keys, attest
+visibility, and download a workspace pipeline specification. The assistant never
+connects to Salesforce or accepts credentials. It excludes unsupported fields
+only through an explicit projection; omissions remain visible for review.
+An inspection report has no row samples and does not prove full visibility,
+scalar source values, or uniqueness. Configuration is reviewed locally before
+any deployment.
+
+Before deployment, run:
+
+```python
+preflight = validate_pipeline(spark, pipeline_spec, check_count=True)
+display(preflight)  # Inspect checks, migration reports and extraction estimates.
+if not preflight["ready"]:
+    raise RuntimeError("Resolve connector preflight errors before deployment")
+```
+
+`health` reports distinguish source authentication, permission, missing-resource,
+rate-limit, configuration, schema-policy and capacity failures. They check the
+requested options against UC's injected allowlist and report token-expiry
+metadata when available. `check_count=True` adds one SAQL count query; it does
+not download row values or certify a complete snapshot. UC injection or reader
+initialization failures return an execution error with setup/grant/authorization
+checks. The source reader does not refresh tokens; renewal remains in UC.
+
+Direct callers with an already configured connector can use
+`check_connection(dataset_id, table_options, check_count=True)`,
+`inspect_dataset(dataset_id)`, and `get_extraction_plan(dataset_id, table_options)`.
+The private `_crm_analytics_diagnostics` report table is for notebook reads,
+not an ingestion destination or a source business dataset.
+
+### Explicit schema evolution policy
+
+The existing behavior remains unchanged when no baseline is configured. To
+guard changes across captures, review the candidate `schema_baseline` in a
+successful dataset health report, then save that object in the table settings:
+
+```python
+table_configuration["schema_baseline"] = approved_baseline
+table_configuration["schema_evolution_mode"] = "strict"  # or "additive"
+```
+
+`strict` accepts an unchanged schema. `additive` also accepts new nullable
+physical columns. Both reject removed fields, type/nullability/source-mapping
+changes, altered keys, generated-column changes, and security/visibility-scope
+identity changes before row queries. Column order is not identity. Use preflight
+to obtain the added/removed/changed columns and required migration action.
+The baseline stays operator-managed; it is never silently updated.
+
+An accepted source addition still requires target/runtime schema support.
+The policy does not issue target DDL, clear checkpoints or migrate Delta tables.
+Review additions in preflight and validate them in the intended Lakeflow runtime.
+Key or scope changes require a new destination or an explicit reviewed migration.
+
+### Large-dataset planning and key-validation memory
+
+`get_extraction_plan` and preflight use pinned metadata to estimate data pages,
+the terminal empty-page probe, two mandatory count queries, minimum query budget,
+maximum offset, and key capacity. They execute no row/count queries by default.
+Retries increase the actual request count. An estimate is not a source capacity
+or freshness guarantee: benchmark representative Salesforce data and quotas.
+
+Strict business-key mode defaults to an in-memory exact key set. To move that
+validation index to private ephemeral local disk:
+
+```json
+{
+  "key_validation_mode": "sqlite",
+  "key_validation_cache_kib": 8192
+}
+```
+
+The cache option accepts 64–65,536 KiB and budgets SQLite's page cache only.
+Full composite key bytes are indexed, preserving exact duplicate detection
+without hash-collision assumptions. Provision local disk for those keys.
+They contain source data: the temporary directory/database are private and are
+removed on exhaustion, failure or explicit iterator close. Hard process termination
+can leave temporary files for the runtime's cleanup. Storage failure aborts the
+snapshot. `max_keys`, full-count/page checks, budgets and publication rules still
+apply; no rows are capped or skipped.
+
+Generated version/row keys use a constant-memory counter instead of retaining
+every predictable key. Completion evidence includes storage mode, data/page-query
+counts, peak page rows and measured rows per second. Rows/pages and the HTTP
+response still consume memory; the 64 MiB response validation remains.
+Extraction remains sequential. Parallel SAQL reads and binary bulk export are
+not enabled without proving source ordering, disjoint coverage and API eligibility.
 
 ### Skip unchanged published versions
 
@@ -384,7 +502,11 @@ Set these directly under each `table` object in the pipeline specification:
 | `selected_columns` | No | Nonempty JSON array of distinct source physical names, including all business keys. Remove this option to read all physical columns; `["*"]` and an empty array are unsupported. Order is immaterial; changing selection requires migration. |
 | `decimal_precision` | No | Measure precision from 1–38; default 38. All measures use this contract. |
 | `decimal_scale` | No | Measure scale from 0 through `decimal_precision`; default 18. Lowering precision below 18 also requires lowering scale. Values that require rounding or overflow fail the capture. |
-| `max_keys` | No | Maximum full-snapshot uniqueness-validation set: 1–10,000,000; default 1,000,000. Exceeding it fails; it never truncates a snapshot. Size it together with available memory. |
+| `schema_baseline` | No | Approved version-independent baseline JSON object from a reviewed dataset health report. Guards cross-capture schema, keys, mappings and visibility identity. Never advanced automatically. |
+| `schema_evolution_mode` | No | Requires a baseline. `strict` (default with baseline) requires unchanged fields; `additive` also accepts nullable physical additions. Target schema support still requires runtime validation. |
+| `key_validation_mode` | No | `memory` (default) or `sqlite` for exact business-key validation. Generated version/row keys always use a counter. |
+| `key_validation_cache_kib` | No | SQLite page-cache budget, 64–65,536 KiB; default 8,192. Does not bound HTTP response or total process memory. |
+| `max_keys` | No | Maximum full-snapshot validation capacity: 1–10,000,000; default 1,000,000. Applies in memory, SQLite and generated modes. Exceeding it fails; it never truncates a snapshot. Size memory or local disk appropriately. |
 | `max_query_requests` | No | Per-read SAQL HTTP-attempt allowance: 1–100,000; default 2,000. Includes retries, both counts and the terminal empty page. Does not count metadata GETs. |
 | `max_read_seconds` | No | Per-read monotonic elapsed-time budget: 1–86,400 seconds; default 1,800. Includes metadata fetched during the read, retry waits and caller delays. Exceeding it aborts the snapshot. |
 

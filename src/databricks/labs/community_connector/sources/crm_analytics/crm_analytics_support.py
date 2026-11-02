@@ -10,6 +10,10 @@ from decimal import Decimal
 class CrmAnalyticsError(RuntimeError):
     """A sanitized configuration, source, or snapshot-integrity failure."""
 
+    def __init__(self, message: str, *, code: str = "CONNECTOR_ERROR"):
+        super().__init__(message)
+        self.code = code
+
 
 def _fingerprint(value) -> str:
     return hashlib.sha256(

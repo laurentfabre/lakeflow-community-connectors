@@ -29,6 +29,7 @@
       <a href="#install">Install</a>
       <a href="#authentication">Configure OAuth</a>
       <a href="#pipeline">Configure a pipeline</a>
+      <a href="#guided-setup">Guided setup &amp; preflight</a>
       <a href="#reference">Configuration reference</a>
       <a href="#data-contract">Data &amp; snapshot behavior</a>
       <a href="#operations">Operate &amp; size</a>
@@ -96,9 +97,13 @@
           <tr><th scope="row">Deletes inferred from snapshots</th><td><span class="tag check">Validate</span></td><td>Absence can remove a target row only after a complete, same-scope snapshot. Prove empty-source and permission-loss behavior.</td></tr>
           <tr><th scope="row">Publication and Add Data setup page</th><td><span class="tag check">Workspace tested</span></td><td>Wheel staging, exact manifest readback, and the named setup page passed a single-workspace smoke test on 2026-10-30. The CLI supplies a verified setup link and an ordinary JSON fallback where needed. Named tile discovery still requires workspace enablement.</td></tr>
           <tr><th scope="row">Managed ingestion pipeline</th><td><span class="tag check">Targeted test</span></td><td>Two normal updates passed with generated row keys on a two-column raw projection, including duplicate/null business keys and exact repeat-output comparison. Validate the intended workload and remaining lifecycle gates.</td></tr>
-          <tr><th scope="row">Schema evolution</th><td><span class="tag check">Validate</span></td><td>Selected schema drift during a capture fails. Cross-capture additive changes and incompatible changes need runtime testing and a migration policy.</td></tr>
+          <tr><th scope="row">Target schema evolution</th><td><span class="tag check">Validate</span></td><td>Source schema drift during a capture fails; an approved cross-capture policy can allow nullable additions. Validate propagation into the chosen Delta target and runtime before accepting those additions.</td></tr>
           <tr><th scope="row">Large datasets and high offsets</th><td><span class="tag check">Validate</span></td><td>SAQL offset-pagination cost, stable ordering, source limits, quotas, and target freshness require representative measurement.</td></tr>
           <tr><th scope="row">Skip unchanged dataset versions</th><td><span class="tag yes">Implemented</span></td><td>Opt-in workspace pipeline callback uses Lakeflow checkpoints to skip row extraction when version and metadata identity match. New versions still require full snapshots. See <a href="#incremental-versions">setup and migration</a>.</td></tr>
+          <tr><th scope="row">Connection health and preflight reports</th><td><span class="tag yes">Implemented</span></td><td>Read-only UC-backed discovery, dataset access, allowlist, expiry metadata, schema policy and capacity checks. Optional count probe; no row samples or OAuth renewal. <a href="#guided-setup">Run preflight</a>.</td></tr>
+          <tr><th scope="row">Cross-capture schema policy</th><td><span class="tag yes">Implemented</span></td><td>Approved baseline with strict matching or nullable physical additions. Breaking changes fail before extraction; reports identify migration needs. Target schema evolution still requires runtime validation.</td></tr>
+          <tr><th scope="row">Disk-backed business-key validation</th><td><span class="tag yes">Implemented</span></td><td>Optional private SQLite index detects exact duplicates with a configurable page cache. Generated row keys use a constant-memory counter. Full completeness checks and limits remain active.</td></tr>
+          <tr><th scope="row">Guided offline configuration</th><td><span class="tag yes">Implemented</span></td><td><a href="crm-analytics-setup.html">Setup assistant</a> imports metadata reports, previews columns, validates choices and exports a workspace pipeline specification. No credentials or network requests in the page.</td></tr>
           <tr><th scope="row">Native CDC / tombstone stream</th><td><span class="tag no">Unsupported</span></td><td>No row cursor, native delete feed, or source-event ordering. Executed reads return all rows; the optional workspace callback can skip unchanged versions.</td></tr>
           <tr><th scope="row">sObjects, live or external dataset types</th><td><span class="tag no">Unsupported</span></td><td>Only materialized Default CRM Analytics datasets fall within the connector contract.</td></tr>
           <tr><th scope="row">Selected multivalue / calculated fields</th><td><span class="tag no">Unsupported</span></td><td>Exclude unsupported non-key fields with an explicit projection. Malformed metadata still fails.</td></tr>
@@ -185,7 +190,7 @@ export DATABRICKS_CONFIG_PROFILE='&lt;PROFILE&gt;'</code></pre></div>
       </tbody></table></div>
       <h3>Exact source table-option allowlist</h3>
       <p>For manual connection setup, set <code>externalOptionsAllowList</code> to this exact value. The repository CLI derives it from the local spec and adds its framework transport options automatically.</p>
-      <div class="code-block"><div class="code-bar"><span>Connection setting · externalOptionsAllowList</span><button class="copy" type="button" hidden>Copy</button></div><pre><code>source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,auto_increment_column,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds,expected_snapshot_fingerprint</code></pre></div>
+      <div class="code-block"><div class="code-bar"><span>Connection setting · externalOptionsAllowList</span><button class="copy" type="button" hidden>Copy</button></div><pre><code>source_primary_keys,primary_keys,version_id,supported_scope,scope_fingerprint,column_name_mode,selected_columns,auto_increment_column,decimal_precision,decimal_scale,max_keys,max_query_requests,max_read_seconds,expected_snapshot_fingerprint,key_validation_mode,key_validation_cache_kib,schema_baseline,schema_evolution_mode,diagnostic_action,diagnostic_dataset_id,diagnostic_table_options,diagnostic_check_count</code></pre></div>
       <details><summary>Alternative: create the connection with the community CLI</summary>
         <p>Confirm that Salesforce accepts the exact loopback callback first. A fixed port makes the requested callback predictable: the example uses <code>http://127.0.0.1:8020/callback</code>. Fixed-port registration still requires live acceptance testing.</p>
         <p>Populate <code>CRM_CONNECTION_OPTIONS</code> in a private shell through your approved secret tooling. Its JSON contains <code>client_id</code>, <code>client_secret</code>, <code>instance_url</code>, and <code>api_version</code>, plus endpoint overrides when needed. Keep credentials out of source files, pipeline specs, shell history, and shared logs. The CLI transports options as a command argument, which may be visible to local process inspection; use the UI or an approved private environment for secrets.</p>
@@ -276,6 +281,34 @@ community-connector run_pipeline crm_analytics_eval</code></pre></div>
       <p>Use triggered runs, scheduled through a Lakeflow Job after the dataset refresh and version-resolution step. Set the cadence from measured refresh timing, extraction duration, and source quotas. Test unchanged versions, overlapping triggers, refresh races, restarts, and expired versions before enabling a recurring schedule.</p>
     </section>
 
+    <section id="guided-setup" aria-labelledby="guided-setup-title">
+      <div class="eyebrow">Configure with metadata</div><h2 id="guided-setup-title">Guided setup and connection checks</h2>
+      <p>Deploy the updated reader and complete allowlist above. In a notebook, register the connector and use the existing UC connection for discovery, field inspection and health reports. The connection supplies the token at runtime.</p>
+      <div class="code-block"><div class="code-bar"><span>Notebook · inspect without downloading rows</span><button class="copy" type="button" hidden>Copy</button></div><pre><code>from databricks.labs.community_connector import register
+from databricks.labs.community_connector.sources.crm_analytics.crm_analytics_setup import (
+    run_diagnostics, validate_pipeline,
+)
+register(spark, "crm_analytics")
+spark.conf.set("spark.databricks.unityCatalog.connectionDfOptionInjection.enabled", "true")
+
+discovery = run_diagnostics(spark, connection_name="crm-analytics", action="discover")
+inspection = run_diagnostics(
+    spark, connection_name="crm-analytics", action="inspect", dataset_id="&lt;DATASET_ID&gt;"
+)</code></pre></div>
+      <p>Export <code>inspection</code> as a JSON file, then <a class="button secondary" href="crm-analytics-setup.html">Open the setup assistant</a>. Import the file to preview physical fields and types, select columns and ingestion keys, and download a workspace pipeline specification. Key suggestions are unverified; source values and full visibility still need operator validation. The assistant runs locally and never asks for credentials.</p>
+      <div class="code-block"><div class="code-bar"><span>Notebook · validate the generated pipeline specification</span><button class="copy" type="button" hidden>Copy</button></div><pre><code>report = validate_pipeline(spark, pipeline_spec, check_count=True)
+display(report)
+if not report["ready"]:
+    raise RuntimeError("Resolve connector preflight errors before deployment")</code></pre></div>
+      <p>Health reports identify source authentication, permissions, missing resources, rate limits, missing allowed options, schema-policy failures and capacity constraints. Expiry metadata is advisory: the source probe checks the injected token. The optional count probe runs one query and does not certify a complete snapshot. OAuth renewal remains in the connection layer.</p>
+      <h3>Approve a schema baseline</h3>
+      <p>A dataset health report includes a candidate <code>schema_baseline</code>. Review it, then save that object in <code>table_configuration</code> with <code>schema_evolution_mode="strict"</code> or <code>"additive"</code>. Strict mode requires the same schema; additive mode also accepts new nullable physical columns. Both reject removals, type/nullability/mapping changes, changed keys and security/scope identity. Preflight returns a migration report; the baseline is never automatically advanced.</p>
+      <p>This source policy does not issue target DDL or reset checkpoints. Validate target schema support before accepting additions; use a new destination or explicit migration for changed keys or scope.</p>
+      <h3>Plan larger snapshots</h3>
+      <p>Preflight estimates data pages, the terminal probe, two mandatory count queries, minimum request budget and key capacity. Use <code>key_validation_mode="sqlite"</code> to put strict business-key validation on private local disk, with <code>key_validation_cache_kib=8192</code> by default (64–65,536 KiB). Files contain source keys and are removed on exhaustion, errors or iterator close; provision suitable ephemeral disk. Hard process termination relies on runtime cleanup. The cache setting does not bound total response/process memory.</p>
+      <p>Generated row keys use a constant-memory counter. Successful read evidence includes page counts, peak page rows, storage mode and throughput. Existing <code>max_keys</code>, budgets and completeness checks still apply. Extraction remains sequential; representative source-volume tests are required before capacity or freshness commitments.</p>
+    </section>
+
     <section id="reference" aria-labelledby="reference-title">
       <div class="eyebrow">07 / Keep configuration in the right place</div><h2 id="reference-title">Configuration reference</h2>
       <h3>Connection settings</h3><p>Credentials and HTTP transport settings belong in the UC connection. The spec marks both app identity fields as secret. <code>access_token</code> is injected by the connection, not a normal setup parameter.</p>
@@ -317,6 +350,8 @@ community-connector run_pipeline crm_analytics_eval</code></pre></div>
       <h3>Common framework controls</h3>
       <div class="table-wrap" tabindex="0" role="region" aria-label="Framework table configuration"><table><thead><tr><th scope="col">Option</th><th scope="col">Usage for this connector</th></tr></thead><tbody>
         <tr><th scope="row"><code>skip_unchanged_versions</code></th><td>Boolean, default <code>false</code>. Workspace snapshot pipeline only: <a href="#incremental-versions">skip committed versions</a> with matching metadata identity. Requires updated framework/source and a new destination or explicit checkpoint migration.</td></tr>
+        <tr><th scope="row"><code>schema_baseline</code> / <code>schema_evolution_mode</code></th><td>Approved baseline JSON and <code>strict</code> (default with baseline) or <code>additive</code>. Mode requires a baseline. Source compatibility guard; target changes require review. <a href="#guided-setup">Setup and migration reports</a>.</td></tr>
+        <tr><th scope="row"><code>key_validation_mode</code> / <code>key_validation_cache_kib</code></th><td><code>memory</code> (default) or <code>sqlite</code>; SQLite cache 64–65,536 KiB, default 8192. Generated row keys use a counter. Does not change row counts, key capacity or completeness checks.</td></tr>
         <tr><th scope="row"><code>scd_type</code></th><td><code>SCD_TYPE_1</code> by default, or <code>SCD_TYPE_2</code> snapshot history. <code>APPEND_ONLY</code> is unsupported for this source.</td></tr>
         <tr><th scope="row"><code>primary_keys</code></th><td>Normally omit. Must exactly match connector metadata: mapped source keys by default, or <code>["_crm_analytics_version_id", "&lt;auto_increment_column&gt;"]</code> in generated mode. The shared parser removes this override before the reader can check it.</td></tr>
         <tr><th scope="row"><code>sequence_by</code></th><td>Leave unset. There is no row cursor; this option does not order dataset versions for the snapshot pipeline.</td></tr>
@@ -450,7 +485,7 @@ community-connector run_pipeline crm_analytics_eval</code></pre></div>
       <p>For source permissions/OAuth, start with the Salesforce administrator. For workspace grants, wheels, runtime, or pipeline errors, involve the Databricks platform owner. Report connector defects through the <a href="https://github.com/laurentfabre/lakeflow-community-connectors/issues">contribution repository</a> using the source name, exact revision, redacted spec, runtime, error category, expected/observed behavior, and a synthetic reproduction where possible. Confirm the repository's current issue intake before sharing; never post customer data or credentials publicly.</p>
       <p>This is a community contribution. Product support channels and agreements apply to the products they cover; they do not establish a separate support SLA for this connector.</p>
     </section>
-    <footer>CRM Analytics community connector · Package 0.1.0 · Guide reviewed 30 October 2026.<br>Self-contained HTML: no external fonts, scripts, analytics, or network dependency for reading. Open from a local checkout or serve from your documentation host.</footer>
+    <footer>CRM Analytics community connector · Package 0.1.0 · Guide reviewed 2 November 2026.<br>Self-contained HTML: no external fonts, scripts, analytics, or network dependency for reading. Open from a local checkout or serve from your documentation host.</footer>
   </main>
   <div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
   <script>
