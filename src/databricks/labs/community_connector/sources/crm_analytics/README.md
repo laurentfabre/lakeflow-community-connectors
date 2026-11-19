@@ -132,6 +132,40 @@ alternative configuration surfaces, subject to their OAuth support and the
 same callback validation gates. A connection specification alone does not prove
 that either path has successfully authenticated to Salesforce.
 
+### Recommended for scheduled ingestion: client credentials (M2M)
+
+Salesforce token responses carry no `expires_in`. Unity Catalog therefore
+records the first access token as valid for 100 years and never renews it,
+for both `u2m` and `m2m` connections. Ingestion then fails with HTTP 401 once
+the Salesforce session timeout (often 2 hours) has elapsed. Setting
+`expires_in_secs` on the connection does not change this behavior.
+
+For `m2m` connections the connector renews the token itself. When the
+connection injects `community_oauth_flow=m2m` together with `client_id`,
+`client_secret` and `token_endpoint`, the connector ignores the injected access
+token, requests a fresh one with the OAuth client credentials grant on its first
+request, and renews it once if Salesforce returns HTTP 401 mid-read. The secret
+is sent only to an `https://*.salesforce.com/services/oauth2/token` endpoint.
+No refresh token is involved, so refresh-token rotation and inactivity expiry
+do not apply. `u2m` and static connections keep using the injected token.
+
+1. In the Salesforce app (Connected App or External Client App), enable the
+   **Client Credentials Flow** and set **Run As** to the integration user in
+   the app's OAuth policies.
+2. Create the connection with the CLI. Use the organization's My Domain token
+   endpoint; the client credentials flow is not available on
+   `login.salesforce.com`. Salesforce rejects a `scope` parameter for this
+   grant, so pass a spec without the `u2m` `oauth` block:
+
+   ```bash
+   community-connector create_connection crm_analytics my_crma_m2m \
+     --auth-type m2m --spec ./connector_spec_without_oauth_block.yaml \
+     -o '{"client_id": "...", "client_secret": "...",
+          "token_endpoint": "https://<my-domain>.my.salesforce.com/services/oauth2/token",
+          "instance_url": "https://<my-domain>.my.salesforce.com",
+          "api_version": "<NN.0>"}'
+   ```
+
 ## Supported Objects
 
 Tables are discovered dynamically as CRM Analytics **dataset IDs**, not dataset
@@ -223,7 +257,9 @@ requested options against UC's injected allowlist and report token-expiry
 metadata when available. `check_count=True` adds one SAQL count query; it does
 not download row values or certify a complete snapshot. UC injection or reader
 initialization failures return an execution error with setup/grant/authorization
-checks. The source reader does not refresh tokens; renewal remains in UC.
+checks. For `u2m` connections the source reader does not refresh tokens and
+renewal remains in UC; for `m2m` connections see
+[client credentials](#recommended-for-scheduled-ingestion-client-credentials-m2m).
 
 Direct callers with an already configured connector can use
 `check_connection(dataset_id, table_options, check_count=True)`,
@@ -451,7 +487,7 @@ A validated empty snapshot still reaches snapshot CDC and may delete all rows.
 
 Default is `false`, retaining full reads on every update. This option applies to
 snapshot ingestion in the repository workspace pipeline, not direct reader calls
-or the managed `ingestion_definition` service. For CLI deployment use
+or the [managed `ingestion_definition` pipeline](#managed-ingestion-pipeline-ingestion_definition). For CLI deployment use
 `--use-workspace-pipeline` with this fork/branch. Use a **new destination** when
 enabling or disabling this mode on an existing flow, or explicitly migrate its
 checkpoint:
@@ -738,9 +774,67 @@ Use only keys actually present in that dataset's XMD. Add another table entry
 for each additional dataset, with its own approved keys and visibility scope.
 Keep credentials in the named connection. A fixed `version_id` intentionally
 selects the same version; orchestration must resolve and propagate a new pin
-for each new capture if the goal is to follow dataset refreshes. Validate the
-selected environment's managed-ingestion configuration separately; this JSON
-is not a direct managed ingestion API request.
+for each new capture if the goal is to follow dataset refreshes. This JSON is the
+workspace pipeline spec (`--use-workspace-pipeline`), not a managed ingestion API
+request; see below for the managed form.
+
+#### Managed ingestion pipeline (`ingestion_definition`)
+
+A managed pipeline (source type `COMMUNITY`, connector wheels in
+`environment.dependencies`) is supported with **one dataset per pipeline**.
+Validated on serverless with a full refresh of a 75,000-row dataset.
+
+- Put the connector options in
+  `connector_options.community_connector_options.options`, not in
+  `table_configuration`, which keeps only the ingestion controls (`scd_type`).
+  Send list options as JSON strings, for example
+  `"source_primary_keys": "[\"Account.Id\", \"FiscalYear\"]"`.
+- Databricks sends no `tableConfigs` in this mode. The table options reach the
+  connector as top-level options, for metadata as for reads, together with
+  pipeline and engine options (`dltupdateid`, `schemaname`, `conduit*`, …) that
+  the connector ignores.
+- Databricks merges the options of all the tables of a pipeline, and the last
+  table wins: every table is then read with the keys, projection and scope of the
+  last one. Do not put two datasets with different options in the same managed
+  pipeline; create one pipeline per dataset.
+- `skip_unchanged_versions` belongs to the workspace pipeline and does not apply.
+
+```json
+{
+  "name": "crm_analytics_account_analytics",
+  "catalog": "<CATALOG>",
+  "schema": "<SCHEMA>",
+  "serverless": true,
+  "configuration": {"pipelines.managedIngestion.registerPythonDataSource": "true"},
+  "environment": {"dependencies": ["<VOLUME_PATH>/<framework>.whl", "<VOLUME_PATH>/<crm_analytics>.whl"]},
+  "ingestion_definition": {
+    "connection_name": "crm_analytics_connection",
+    "source_type": "COMMUNITY",
+    "objects": [
+      {
+        "table": {
+          "source_schema": "default",
+          "source_table": "<DATASET_ID>",
+          "destination_catalog": "<CATALOG>",
+          "destination_schema": "<SCHEMA>",
+          "destination_table": "account_analytics",
+          "table_configuration": {"scd_type": "SCD_TYPE_1"},
+          "connector_options": {
+            "community_connector_options": {
+              "options": {
+                "source_primary_keys": "[\"Account.Id\", \"FiscalYear\"]",
+                "selected_columns": "[\"Account.Id\", \"FiscalYear\", \"Amount\"]",
+                "supported_scope": "scalar_full_visibility",
+                "scope_fingerprint": "<APPROVED_STABLE_VISIBILITY_SCOPE>"
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}
+```
 
 ### Step 3: Run and Schedule the Pipeline
 

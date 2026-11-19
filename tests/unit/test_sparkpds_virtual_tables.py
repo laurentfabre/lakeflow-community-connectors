@@ -354,3 +354,71 @@ def test_snapshot_metadata_schema_is_optional_for_existing_connectors():
     reader = _reader(_FlatConnector({}), METADATA_TABLE, tableNameList='["t1"]')
     reader.schema = schema
     assert list(reader.read(None)) == [("t1", None, None, None, None, None)]
+
+
+# ----- `_community_table_metadata` table options -----
+
+
+class _RecordingConnector(_FlatConnector):
+    """Records the table options each `read_table_metadata` call receives."""
+
+    def __init__(self, options):
+        super().__init__(options)
+        self.metadata_calls = []
+
+    def read_table_metadata(self, table_name, table_options):
+        self.metadata_calls.append((table_name, dict(table_options)))
+        return {}
+
+
+def test_metadata_uses_table_configs_when_present():
+    """Workspace pipeline: per-table options come from `tableConfigs` only."""
+    connector = _RecordingConnector({})
+    reader = _reader(
+        connector,
+        METADATA_TABLE,
+        **{
+            TABLE_NAME_LIST: json.dumps(["t1", "t2"]),
+            TABLE_CONFIGS: json.dumps({"t1": {"a": "1"}}),
+            "databricks.connection": "conn",
+        },
+    )
+    reader._read_table_metadata()
+    assert connector.metadata_calls == [("t1", {"a": "1"}), ("t2", {})]
+
+
+def test_metadata_uses_top_level_options_without_table_configs():
+    """Managed pipeline: no `tableConfigs`, the table options are top-level options."""
+    connector = _RecordingConnector({})
+    reader = _reader(
+        connector,
+        METADATA_TABLE,
+        **{
+            # Spark lowercases option names in managed mode.
+            "tablenamelist": json.dumps(["t1"]),
+            "supported_scope": "scalar_full_visibility",
+            "dltupdateid": "u-1",
+        },
+    )
+    # Spark hands the reader a case-insensitive map; emulate the lookups it serves.
+    reader.options = _CaseInsensitive(reader.options)
+    reader._read_table_metadata()
+    assert connector.metadata_calls == [
+        ("t1", {"supported_scope": "scalar_full_visibility", "dltupdateid": "u-1"})
+    ]
+
+
+class _CaseInsensitive(dict):
+    """Minimal stand-in for PySpark's CaseInsensitiveDict (keys stored lowercase)."""
+
+    def __init__(self, data):
+        super().__init__({k.lower(): v for k, v in data.items()})
+
+    def __contains__(self, key):
+        return super().__contains__(key.lower())
+
+    def get(self, key, default=None):
+        return super().get(key.lower(), default)
+
+    def __getitem__(self, key):
+        return super().__getitem__(key.lower())

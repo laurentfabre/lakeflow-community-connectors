@@ -2,7 +2,9 @@
 
 The independent archival layer must consume the iterator to exhaustion before
 publishing. A yielded prefix is never evidence of a complete snapshot. This
-module does not implement source-native CDC or OAuth token renewal.
+module does not implement source-native CDC. OAuth renewal is left to the
+connection layer, except for client credentials (M2M) connections, where the
+connector requests its own short-lived access token.
 """
 
 from __future__ import annotations
@@ -57,6 +59,29 @@ from databricks.labs.community_connector.sources.crm_analytics.crm_analytics_sup
 _ID = re.compile(r"[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?\Z")
 _RETRY_STATUSES = {429, 500, 502, 503, 504}
 _GENERATED_VERSION_COLUMN = "_crm_analytics_version_id"
+# Options a managed ingestion pipeline (ingestion_definition, source type COMMUNITY)
+# adds next to the table options, observed on serverless in 2026-11. They carry
+# pipeline and engine settings, not source extraction, so they are ignored instead of
+# being rejected as unknown table options. Lowercase, as Spark passes them.
+_MANAGED_PLATFORM_OPTIONS = frozenset(
+    {
+        "connectionname",
+        "dltpipelineid",
+        "dltupdateid",
+        "enableucconnectiontypevalidation",
+        "is_snapsource_connector",
+        "maxfetchparallelism",
+        "operationalmetadataloggingenabled",
+        "pipeline_origin_system",
+        "reportfetchtimeoutsec",
+        "schemaname",
+        "serializableresponseheadersenabled",
+        "sourcetype",
+        "syncintervalinsec",
+    }
+)
+# Engine feature flags, a family Databricks extends over time.
+_MANAGED_PLATFORM_OPTION_PREFIX = "conduit"
 _DATE_PARTS = {
     "day",
     "epochDay",
@@ -82,6 +107,49 @@ def _identifier(value, name: str) -> str:
     return value
 
 
+def _client_credentials(options: dict) -> tuple | None:
+    """Return (client_id, client_secret, token_endpoint) for M2M connections.
+
+    Used only when the connection layer declares the client credentials flow
+    (community_oauth_flow=m2m) and injects all three values. The secret is only
+    ever sent to an HTTPS Salesforce OAuth token endpoint.
+    """
+    if str(options.get("community_oauth_flow", "")).lower() != "m2m":
+        return None
+    client_id = options.get("client_id")
+    client_secret = options.get("client_secret")
+    token_endpoint = options.get("token_endpoint")
+    if not all(isinstance(v, str) and v for v in (client_id, client_secret, token_endpoint)):
+        return None
+    try:
+        parsed = urlsplit(token_endpoint)
+        valid = (
+            parsed.scheme == "https"
+            and parsed.hostname is not None
+            and parsed.hostname.endswith(".salesforce.com")
+            and parsed.port in (None, 443)
+            and not parsed.username
+            and not parsed.password
+            and parsed.path == "/services/oauth2/token"
+            and not parsed.query
+            and not parsed.fragment
+        )
+    except (TypeError, ValueError):
+        valid = False
+    if not valid:
+        raise CrmAnalyticsError(
+            "token_endpoint must be https://<domain>.salesforce.com/services/oauth2/token"
+        )
+    return client_id, client_secret, token_endpoint
+
+
+def _is_managed_platform_option(name: str) -> bool:
+    lowered = name.lower()
+    return lowered in _MANAGED_PLATFORM_OPTIONS or lowered.startswith(
+        _MANAGED_PLATFORM_OPTION_PREFIX
+    )
+
+
 def _is_default_dataset_type(value) -> bool:
     # The datasetTypes request enum is "Default"; resource responses can use
     # lowercase "default". Type casing does not change the supported scope.
@@ -91,7 +159,8 @@ def _is_default_dataset_type(value) -> bool:
 class CrmAnalyticsLakeflowConnect(LakeflowConnect):
     """Read complete snapshots of scalar, full-visibility Default datasets.
 
-    Connection: instance_url, access_token, api_version; optional page_size
+    Connection: instance_url, access_token (or, for community_oauth_flow=m2m,
+    client_id/client_secret/token_endpoint), api_version; optional page_size
     (1..10000, default 1000), timeout_seconds (1..300, default 30), max_retries
     (0..8, default 3), max_retry_delay_seconds (1..120, default 30).
 
@@ -133,10 +202,18 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
         if not good_origin:
             raise CrmAnalyticsError("instance_url must be a trusted HTTPS *.salesforce.com origin")
         self._origin = f"https://{parsed.hostname}"
+        # M2M (client credentials) connections: the connection layer injects
+        # client_id/client_secret/token_endpoint but never renews the access
+        # token (Salesforce omits expires_in), so the connector obtains its own.
+        self._client_credentials = _client_credentials(options)
         token = options.get("access_token")
-        if not isinstance(token, str) or not token or any(ord(c) < 32 for c in token):
+        if self._client_credentials is not None:
+            # The injected token may be stale; a fresh one is requested lazily.
+            self._token = None
+        elif not isinstance(token, str) or not token or any(ord(c) < 32 for c in token):
             raise CrmAnalyticsError("A nonempty injected OAuth access_token is required")
-        self._token = token
+        else:
+            self._token = token
         version = options.get("api_version", "")
         if (
             not isinstance(version, str)
@@ -201,12 +278,82 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                 delay = min(self._delay_cap, max(delay, wait))
         return delay
 
+    def _fetch_client_credentials_token(self) -> None:
+        """Obtain a fresh access token with the OAuth client credentials grant."""
+        if self._client_credentials is None:
+            raise CrmAnalyticsError("No client credentials available", code="AUTHENTICATION")
+        client_id, client_secret, token_endpoint = self._client_credentials
+        session = self._get_session()
+        for attempt in range(self._retries + 1):
+            response = None
+            try:
+                session.cookies.clear()
+                response = session.post(
+                    token_endpoint,
+                    data={
+                        "grant_type": "client_credentials",
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                    },
+                    headers={"Accept": "application/json"},
+                    timeout=(self._timeout, self._timeout),
+                    allow_redirects=False,
+                )
+            except (requests.Timeout, requests.ConnectionError):
+                if attempt == self._retries:
+                    raise CrmAnalyticsError(
+                        "Salesforce token endpoint unreachable after bounded retries",
+                        code="AUTHENTICATION",
+                    ) from None
+            except requests.RequestException:
+                raise CrmAnalyticsError(
+                    "Salesforce token request failed", code="AUTHENTICATION"
+                ) from None
+            else:
+                status = response.status_code
+                if status == 200:
+                    try:
+                        token = response.json().get("access_token")
+                    except (ValueError, AttributeError):
+                        token = None
+                    if not isinstance(token, str) or not token or any(ord(c) < 32 for c in token):
+                        raise CrmAnalyticsError(
+                            "Salesforce token response has no usable access_token",
+                            code="AUTHENTICATION",
+                        )
+                    self._token = token
+                    return
+                if status not in _RETRY_STATUSES or attempt == self._retries:
+                    try:
+                        body = response.json()
+                        error = str(body.get("error", ""))[:100]
+                        description = str(body.get("error_description", ""))[:200]
+                    except (ValueError, AttributeError):
+                        error, description = "", ""
+                    raise CrmAnalyticsError(
+                        f"Salesforce client credentials token request failed (HTTP {status}: "
+                        f"{error} - {description}). Check that the client credentials flow is "
+                        "enabled with a Run As integration user and that the connection's "
+                        "client_id/client_secret are current",
+                        code="AUTHENTICATION",
+                    )
+            finally:
+                session.cookies.clear()
+                if response is not None:
+                    response.close()
+            time.sleep(self._delay(response, attempt))
+        raise AssertionError("unreachable")
+
     def _request(self, method: str, path: str, *, params=None, payload=None, budget=None) -> dict:
         if not path.startswith(self._base + "/") or "\\" in path:
             raise CrmAnalyticsError("Refusing an unexpected API resource path")
+        if self._token is None:
+            self._fetch_client_credentials_token()
+        token_renewed = False
         headers = {"Authorization": f"Bearer {self._token}", "Accept": "application/json"}
         session = self._get_session()
-        for attempt in range(self._retries + 1):
+        attempt = 0
+        while attempt <= self._retries:
             response = None
             try:
                 # Reuse TCP/TLS connections, never source cookie authentication.
@@ -244,6 +391,15 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                 if budget is not None:
                     budget.remaining()
                 status = response.status_code
+                if status == 401 and self._client_credentials is not None and not token_renewed:
+                    # Expired session: renew once, then replay this same request
+                    # without consuming a retry attempt.
+                    token_renewed = True
+                    response.close()
+                    response = None
+                    self._fetch_client_credentials_token()
+                    headers["Authorization"] = f"Bearer {self._token}"
+                    continue
                 if status == 401:
                     raise CrmAnalyticsError(
                         "CRM Analytics authentication expired or invalid; start a fresh UC-backed read "
@@ -279,6 +435,7 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
                 time.sleep(delay)
             else:
                 budget.sleep(delay, query=method == "POST" and path == self._base + "/query")
+            attempt += 1
         raise AssertionError("unreachable")
 
     def _next_link(self, link: str) -> str:
@@ -426,7 +583,7 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
         options = {
             str(k).lower(): v
             for k, v in (table_options or {}).items()
-            if str(k).lower() not in transport
+            if str(k).lower() not in transport and not _is_managed_platform_option(str(k))
         }
         allowed = {
             "source_primary_keys",
