@@ -254,17 +254,32 @@ class LakeflowBatchReader(DataSourceReader):
         table_names = _decode_list_of_str_option(
             TABLE_NAME_LIST, self.options.get(TABLE_NAME_LIST)
         ) or []
-        table_configs = _decode_dict_option(
-            TABLE_CONFIGS, self.options.get(TABLE_CONFIGS)
-        )
         all_records = []
+        if TABLE_CONFIGS in self.options:
+            # Workspace pipeline (`ingest()`): per-table options keyed by table name.
+            table_configs = _decode_dict_option(
+                TABLE_CONFIGS, self.options.get(TABLE_CONFIGS)
+            )
+            per_table = {table: table_configs.get(table, {}) for table in table_names}
+        else:
+            # Managed ingestion pipeline (`ingestion_definition`, source type COMMUNITY):
+            # Databricks sends no `tableConfigs`. The table options arrive as top-level
+            # options, as they do on the read path, so pass them the same way. Databricks
+            # merges them across all the tables of a pipeline (the last table wins), so
+            # they are reliable only when the pipeline has one table, or tables that
+            # share the same options.
+            inline = self._inline_table_options()
+            per_table = {table: inline for table in table_names}
         # Preserve caller-supplied table order — caller controls it.
         for table in table_names:
-            metadata = self.lakeflow_connect.read_table_metadata(
-                table, table_configs.get(table, {})
-            )
+            metadata = self.lakeflow_connect.read_table_metadata(table, per_table[table])
             all_records.append({TABLE_NAME: table, **metadata})
         return all_records
+
+    def _inline_table_options(self) -> dict[str, str]:
+        """Top-level options minus the metadata request's own framework options."""
+        request_keys = {TABLE_NAME.lower(), TABLE_NAME_LIST.lower()}
+        return {k: v for k, v in self.options.items() if k.lower() not in request_keys}
 
     def _read_namespaces(self):
         # Connectors without SupportsNamespaces are flat — no rows.
