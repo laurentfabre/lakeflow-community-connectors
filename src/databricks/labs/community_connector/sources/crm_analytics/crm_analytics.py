@@ -59,6 +59,29 @@ from databricks.labs.community_connector.sources.crm_analytics.crm_analytics_sup
 _ID = re.compile(r"[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?\Z")
 _RETRY_STATUSES = {429, 500, 502, 503, 504}
 _GENERATED_VERSION_COLUMN = "_crm_analytics_version_id"
+# Options a managed ingestion pipeline (ingestion_definition, source type COMMUNITY)
+# adds next to the table options, observed on serverless in 2026-11. They carry
+# pipeline and engine settings, not source extraction, so they are ignored instead of
+# being rejected as unknown table options. Lowercase, as Spark passes them.
+_MANAGED_PLATFORM_OPTIONS = frozenset(
+    {
+        "connectionname",
+        "dltpipelineid",
+        "dltupdateid",
+        "enableucconnectiontypevalidation",
+        "is_snapsource_connector",
+        "maxfetchparallelism",
+        "operationalmetadataloggingenabled",
+        "pipeline_origin_system",
+        "reportfetchtimeoutsec",
+        "schemaname",
+        "serializableresponseheadersenabled",
+        "sourcetype",
+        "syncintervalinsec",
+    }
+)
+# Engine feature flags, a family Databricks extends over time.
+_MANAGED_PLATFORM_OPTION_PREFIX = "conduit"
 _DATE_PARTS = {
     "day",
     "epochDay",
@@ -118,6 +141,13 @@ def _client_credentials(options: dict) -> tuple | None:
             "token_endpoint must be https://<domain>.salesforce.com/services/oauth2/token"
         )
     return client_id, client_secret, token_endpoint
+
+
+def _is_managed_platform_option(name: str) -> bool:
+    lowered = name.lower()
+    return lowered in _MANAGED_PLATFORM_OPTIONS or lowered.startswith(
+        _MANAGED_PLATFORM_OPTION_PREFIX
+    )
 
 
 def _is_default_dataset_type(value) -> bool:
@@ -553,7 +583,7 @@ class CrmAnalyticsLakeflowConnect(LakeflowConnect):
         options = {
             str(k).lower(): v
             for k, v in (table_options or {}).items()
-            if str(k).lower() not in transport
+            if str(k).lower() not in transport and not _is_managed_platform_option(str(k))
         }
         allowed = {
             "source_primary_keys",

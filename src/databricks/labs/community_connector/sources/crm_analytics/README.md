@@ -487,7 +487,7 @@ A validated empty snapshot still reaches snapshot CDC and may delete all rows.
 
 Default is `false`, retaining full reads on every update. This option applies to
 snapshot ingestion in the repository workspace pipeline, not direct reader calls
-or the managed `ingestion_definition` service. For CLI deployment use
+or the [managed `ingestion_definition` pipeline](#managed-ingestion-pipeline-ingestion_definition). For CLI deployment use
 `--use-workspace-pipeline` with this fork/branch. Use a **new destination** when
 enabling or disabling this mode on an existing flow, or explicitly migrate its
 checkpoint:
@@ -774,9 +774,67 @@ Use only keys actually present in that dataset's XMD. Add another table entry
 for each additional dataset, with its own approved keys and visibility scope.
 Keep credentials in the named connection. A fixed `version_id` intentionally
 selects the same version; orchestration must resolve and propagate a new pin
-for each new capture if the goal is to follow dataset refreshes. Validate the
-selected environment's managed-ingestion configuration separately; this JSON
-is not a direct managed ingestion API request.
+for each new capture if the goal is to follow dataset refreshes. This JSON is the
+workspace pipeline spec (`--use-workspace-pipeline`), not a managed ingestion API
+request; see below for the managed form.
+
+#### Managed ingestion pipeline (`ingestion_definition`)
+
+A managed pipeline (source type `COMMUNITY`, connector wheels in
+`environment.dependencies`) is supported with **one dataset per pipeline**.
+Validated on serverless with a full refresh of a 75,000-row dataset.
+
+- Put the connector options in
+  `connector_options.community_connector_options.options`, not in
+  `table_configuration`, which keeps only the ingestion controls (`scd_type`).
+  Send list options as JSON strings, for example
+  `"source_primary_keys": "[\"Account.Id\", \"FiscalYear\"]"`.
+- Databricks sends no `tableConfigs` in this mode. The table options reach the
+  connector as top-level options, for metadata as for reads, together with
+  pipeline and engine options (`dltupdateid`, `schemaname`, `conduit*`, …) that
+  the connector ignores.
+- Databricks merges the options of all the tables of a pipeline, and the last
+  table wins: every table is then read with the keys, projection and scope of the
+  last one. Do not put two datasets with different options in the same managed
+  pipeline; create one pipeline per dataset.
+- `skip_unchanged_versions` belongs to the workspace pipeline and does not apply.
+
+```json
+{
+  "name": "crm_analytics_account_analytics",
+  "catalog": "<CATALOG>",
+  "schema": "<SCHEMA>",
+  "serverless": true,
+  "configuration": {"pipelines.managedIngestion.registerPythonDataSource": "true"},
+  "environment": {"dependencies": ["<VOLUME_PATH>/<framework>.whl", "<VOLUME_PATH>/<crm_analytics>.whl"]},
+  "ingestion_definition": {
+    "connection_name": "crm_analytics_connection",
+    "source_type": "COMMUNITY",
+    "objects": [
+      {
+        "table": {
+          "source_schema": "default",
+          "source_table": "<DATASET_ID>",
+          "destination_catalog": "<CATALOG>",
+          "destination_schema": "<SCHEMA>",
+          "destination_table": "account_analytics",
+          "table_configuration": {"scd_type": "SCD_TYPE_1"},
+          "connector_options": {
+            "community_connector_options": {
+              "options": {
+                "source_primary_keys": "[\"Account.Id\", \"FiscalYear\"]",
+                "selected_columns": "[\"Account.Id\", \"FiscalYear\", \"Amount\"]",
+                "supported_scope": "scalar_full_visibility",
+                "scope_fingerprint": "<APPROVED_STABLE_VISIBILITY_SCOPE>"
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}
+```
 
 ### Step 3: Run and Schedule the Pipeline
 

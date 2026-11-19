@@ -2091,6 +2091,29 @@ def register_lakeflow_source(spark):
     _ID = re.compile(r"[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?\Z")
     _RETRY_STATUSES = {429, 500, 502, 503, 504}
     _GENERATED_VERSION_COLUMN = "_crm_analytics_version_id"
+    # Options a managed ingestion pipeline (ingestion_definition, source type COMMUNITY)
+    # adds next to the table options, observed on serverless in 2026-11. They carry
+    # pipeline and engine settings, not source extraction, so they are ignored instead of
+    # being rejected as unknown table options. Lowercase, as Spark passes them.
+    _MANAGED_PLATFORM_OPTIONS = frozenset(
+        {
+            "connectionname",
+            "dltpipelineid",
+            "dltupdateid",
+            "enableucconnectiontypevalidation",
+            "is_snapsource_connector",
+            "maxfetchparallelism",
+            "operationalmetadataloggingenabled",
+            "pipeline_origin_system",
+            "reportfetchtimeoutsec",
+            "schemaname",
+            "serializableresponseheadersenabled",
+            "sourcetype",
+            "syncintervalinsec",
+        }
+    )
+    # Engine feature flags, a family Databricks extends over time.
+    _MANAGED_PLATFORM_OPTION_PREFIX = "conduit"
     _DATE_PARTS = {
         "day",
         "epochDay",
@@ -2150,6 +2173,13 @@ def register_lakeflow_source(spark):
                 "token_endpoint must be https://<domain>.salesforce.com/services/oauth2/token"
             )
         return client_id, client_secret, token_endpoint
+
+
+    def _is_managed_platform_option(name: str) -> bool:
+        lowered = name.lower()
+        return lowered in _MANAGED_PLATFORM_OPTIONS or lowered.startswith(
+            _MANAGED_PLATFORM_OPTION_PREFIX
+        )
 
 
     def _is_default_dataset_type(value) -> bool:
@@ -2585,7 +2615,7 @@ def register_lakeflow_source(spark):
             options = {
                 str(k).lower(): v
                 for k, v in (table_options or {}).items()
-                if str(k).lower() not in transport
+                if str(k).lower() not in transport and not _is_managed_platform_option(str(k))
             }
             allowed = {
                 "source_primary_keys",
@@ -3600,17 +3630,32 @@ def register_lakeflow_source(spark):
             table_names = _decode_list_of_str_option(
                 TABLE_NAME_LIST, self.options.get(TABLE_NAME_LIST)
             ) or []
-            table_configs = _decode_dict_option(
-                TABLE_CONFIGS, self.options.get(TABLE_CONFIGS)
-            )
             all_records = []
+            if TABLE_CONFIGS in self.options:
+                # Workspace pipeline (`ingest()`): per-table options keyed by table name.
+                table_configs = _decode_dict_option(
+                    TABLE_CONFIGS, self.options.get(TABLE_CONFIGS)
+                )
+                per_table = {table: table_configs.get(table, {}) for table in table_names}
+            else:
+                # Managed ingestion pipeline (`ingestion_definition`, source type COMMUNITY):
+                # Databricks sends no `tableConfigs`. The table options arrive as top-level
+                # options, as they do on the read path, so pass them the same way. Databricks
+                # merges them across all the tables of a pipeline (the last table wins), so
+                # they are reliable only when the pipeline has one table, or tables that
+                # share the same options.
+                inline = self._inline_table_options()
+                per_table = {table: inline for table in table_names}
             # Preserve caller-supplied table order — caller controls it.
             for table in table_names:
-                metadata = self.lakeflow_connect.read_table_metadata(
-                    table, table_configs.get(table, {})
-                )
+                metadata = self.lakeflow_connect.read_table_metadata(table, per_table[table])
                 all_records.append({TABLE_NAME: table, **metadata})
             return all_records
+
+        def _inline_table_options(self) -> dict[str, str]:
+            """Top-level options minus the metadata request's own framework options."""
+            request_keys = {TABLE_NAME.lower(), TABLE_NAME_LIST.lower()}
+            return {k: v for k, v in self.options.items() if k.lower() not in request_keys}
 
         def _read_namespaces(self):
             # Connectors without SupportsNamespaces are flat — no rows.

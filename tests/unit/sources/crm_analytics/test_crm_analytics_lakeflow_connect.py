@@ -573,6 +573,43 @@ def test_matching_destination_key_override_is_optional_and_equivalent(connector)
     assert connector.pin_table(DATASET, options) == connector.pin_table(DATASET, OPTIONS)
 
 
+# Options a managed ingestion pipeline sends next to the table options (observed).
+MANAGED_PLATFORM_OPTIONS = {
+    "connectionname": "crm_analytics_m2m",
+    "dltpipelineid": "e943beb4-31c1-4fe3-92ee-294c6f902e8a",
+    "dltupdateid": "d90e9d53-0521-472f-91d6-f9b564b29d11",
+    "enableucconnectiontypevalidation": "true",
+    "is_snapsource_connector": "true",
+    "maxfetchparallelism": "8",
+    "operationalmetadataloggingenabled": "true",
+    "pipeline_origin_system": "DLT",
+    "reportfetchtimeoutsec": "600",
+    "schemaname": "default",
+    "serializableresponseheadersenabled": "true",
+    "sourcetype": "COMMUNITY",
+    "syncintervalinsec": "0",
+    "conduitlumberjackenabled": "true",
+    "ConduitSomeFutureFlag": "true",
+}
+
+
+def test_managed_pipeline_platform_options_are_ignored(connector):
+    """Managed mode mixes engine options into the table options; they do not alter
+    the source extraction, the pinned version or its scope fingerprint."""
+    managed = {**OPTIONS, **MANAGED_PLATFORM_OPTIONS}
+    assert connector.pin_table(DATASET, managed) == connector.pin_table(DATASET, OPTIONS)
+    assert connector.read_table_metadata(DATASET, managed) == connector.read_table_metadata(
+        DATASET, OPTIONS
+    )
+
+
+def test_managed_pipeline_does_not_hide_unknown_table_options(connector):
+    with pytest.raises(CrmAnalyticsError, match="Unknown table option"):
+        connector.pin_table(
+            DATASET, {**OPTIONS, **MANAGED_PLATFORM_OPTIONS, "filter": "Region=US"}
+        )
+
+
 def test_common_pipeline_override_bypasses_source_validation_boundary(connector):
     """Document, NOT endorse, the shared pipeline's unchecked destination override.
 
